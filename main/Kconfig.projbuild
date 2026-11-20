@@ -1,0 +1,91 @@
+menu "WatchShell"
+
+    config WATCH_WIFI_SSID
+        string "Default Wi-Fi SSID"
+        default ""
+        help
+            留空则首次启动进入 ESP-Watch 配置热点，用网页填写 Wi-Fi 和云端地址。
+
+    config WATCH_WIFI_PASSWORD
+        string "Default Wi-Fi password"
+        default ""
+
+    config WATCH_AI_URL
+        string "Default AI WebSocket URL"
+        default ""
+        help
+            ws:// 或 wss:// 地址。自建 xiaozhi-esp32-server 时填写其 WebSocket 端点。
+
+    config WATCH_AI_TOKEN
+        string "Default AI access token"
+        default ""
+
+    config WATCH_VIDEO_URL
+        string "Default video catalog URL"
+        default ""
+        help
+            返回 {"items":[...]} 的 HTTP(S) URL，例如
+            http://192.168.1.10:8080/watch/api/v1/videos
+
+    config WATCH_VIDEO_TOKEN
+        string "Default video catalog token"
+        default ""
+
+    config WATCH_AP_SSID
+        string "Configuration AP SSID"
+        default "ESP-Watch"
+
+    config WATCH_AP_PASSWORD
+        string "Configuration AP password"
+        default "watchshell"
+
+    config WATCH_LCD_SPI_MHZ
+        int "LCD SPI clock (MHz)"
+        range 10 80
+        default 40
+
+    config WATCH_BRIGHTNESS
+        int "Default brightness (%)"
+        range 5 100
+        default 75
+
+    config WATCH_AUDIO_VOLUME
+        int "Default audio volume (%)"
+        range 0 100
+        default 60
+
+    config WATCH_NORMAL_SPLASH_MS
+        int "Splash duration after a user-requested power-off (ms)"
+        range 0 2000
+        default 450
+
+    config WATCH_FAST_SPLASH_MS
+        int "Splash duration after an idle power-off (ms)"
+        range 0 500
+        default 60
+
+    config WATCH_IDLE_POWEROFF_SEC
+        int "Idle auto power-off timeout (seconds, 0 = disabled)"
+        range 0 3600
+        default 120
+
+    config WATCH_IDLE_OFF_WHILE_CHARGING
+        bool "Allow idle power-off while VBUS is present"
+        default n
+
+    config WATCH_LOW_BATT_MV
+        int "Low battery warning threshold (mV)"
+        range 3000 3800
+        default 3400
+
+    config WATCH_LOW_BATT_RECOVER_MV
+        int "Low battery warning recovery threshold (mV)"
+        range 3000 4200
+        default 3550
+
+    config WATCH_LOW_BATT_WARN_SEC
+        int "Low battery warning time before power-off (seconds)"
+        range 1 60
+        default 3
+
+endmenu

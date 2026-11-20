@@ -1,0 +1,7 @@
+watch.example.com {
+    encode zstd gzip
+    reverse_proxy watch-server:8080 {
+        # Important for SSE chat and WSV2 chunked video.
+        flush_interval -1
+    }
+}

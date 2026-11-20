@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0f14">
+  <title>Watch Server</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="tokenModal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="eyebrow">AUTHENTICATION</div>
+      <h2>需要 Dashboard Token</h2>
+      <p>服务端设置了 <code>ADMIN_TOKEN</code>。输入后保存在本机浏览器。</p>
+      <input id="tokenInput" type="password" placeholder="ADMIN_TOKEN" autocomplete="current-password">
+      <div class="modal-actions">
+        <button id="saveToken" class="btn primary">保存并连接</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">W</span>
+        <div><b>WATCH</b><small>SERVER / v1</small></div>
+      </div>
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item active" data-tab="chat"><span>◈</span>AI 对话</button>
+        <button class="nav-item" data-tab="tts"><span>◉</span>TTS 语音</button>
+        <button class="nav-item" data-tab="files"><span>▤</span>文件上传</button>
+        <button class="nav-item" data-tab="video"><span>▶</span>视频播放</button>
+        <button class="nav-item" data-tab="logs"><span>≡</span>运行日志</button>
+        <button class="nav-item" data-tab="status"><span>⌁</span>运行状态</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="dot" id="sidebarDot"></div>
+        <span id="sidebarState">connecting</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">ESP_WATCH / CONTROL PLANE</div>
+          <h1 id="pageTitle">AI 对话</h1>
+        </div>
+        <div class="top-actions">
+          <span class="pill" id="serverPill">checking</span>
+          <button class="icon-btn" id="refreshBtn" title="刷新状态">↻</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="panel active" id="panel-chat">
+          <div class="panel-head">
+            <div>
+              <h2>对话</h2>
+              <p>DeepSeek API；回答会流式显示。</p>
+            </div>
+            <button class="btn ghost" id="newChatBtn">新对话</button>
+          </div>
+          <div class="chat-toolbar">
+            <label>模型后端
+              <span class="pill ok">DeepSeek API</span>
+            </label>
+            <label>模型
+              <input id="modelInput" placeholder="deepseek-chat">
+            </label>
+            <span class="hint" id="chatHint">就绪</span>
+          </div>
+          <div class="chat-messages" id="chatMessages">
+            <div class="empty-state" id="chatEmpty">
+              <div class="empty-icon">◈</div>
+              <h3>向服务器提问</h3>
+              <p>支持普通聊天、代码问题和中文语音播报。手表与网页共用同一个 AI 后端。</p>
+            </div>
+          </div>
+          <form class="chat-composer" id="chatForm">
+            <textarea id="chatInput" rows="2" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+            <button class="btn primary send-btn" type="submit">发送</button>
+          </form>
+        </section>
+
+        <section class="panel" id="panel-tts">
+          <div class="panel-head">
+            <div>
+              <h2>TTS 语音</h2>
+              <p>默认 Piper 本地合成；也可切到 CosyVoice HTTP 服务。输出 WAV。</p>
+            </div>
+            <span class="pill" id="ttsPill">unknown</span>
+          </div>
+          <div class="grid-two">
+            <div class="card">
+              <label class="field">文本
+                <textarea id="ttsText" rows="7" placeholder="输入要朗读的文本…"></textarea>
+              </label>
+              <div class="row">
+                <label class="field grow">声音
+                  <select id="ttsVoice"><option value="">默认声音</option></select>
+                </label>
+                <button class="btn primary" id="ttsSpeak">生成语音</button>
+              </div>
+              <div class="hint" id="ttsHint">等待生成</div>
+            </div>
+            <div class="card">
+              <div class="card-title">播放与导出</div>
+              <div class="wave-box"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+              <audio id="ttsAudio" controls></audio>
+              <a class="btn ghost full" id="ttsDownload" download="tts.wav" hidden>下载 WAV</a>
+              <p class="muted" id="ttsDetail">Piper 模型未配置时，接口会返回 503。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-files">
+          <div class="panel-head">
+            <div>
+              <h2>文件上传</h2>
+              <p>流式写盘，支持视频、图片、音频和任意附件；单文件上限由服务端配置。</p>
+            </div>
+            <div class="row">
+              <select id="fileFilter">
+                <option value="">全部</option>
+                <option value="video">视频</option>
+                <option value="image">图片</option>
+                <option value="audio">音频</option>
+                <option value="file">其他</option>
+              </select>
+              <button class="btn ghost" id="refreshFiles">刷新</button>
+            </div>
+          </div>
+          <div class="dropzone" id="dropzone" tabindex="0">
+            <input id="fileInput" type="file" multiple hidden>
+            <div class="drop-icon">⇧</div>
+            <h3>拖拽文件到这里，或点击选择</h3>
+            <p>视频会上传到 <code>/data/files</code>，并自动出现在手表 VIDEO 目录。</p>
+            <div class="progress" id="uploadProgress" hidden><div id="uploadBar"></div></div>
+          </div>
+          <div class="file-grid" id="fileList"></div>
+        </section>
+
+        <section class="panel" id="panel-video">
+          <div class="panel-head">
+            <div>
+              <h2>视频播放</h2>
+              <p>浏览器直接播放已上传的 MP4/WebM；手表播放同一文件时由服务器转成 WSV2。</p>
+            </div>
+            <span class="pill" id="videoCount">0 videos</span>
+          </div>
+          <div class="video-layout">
+            <div class="video-stage">
+              <video id="videoPlayer" controls playsinline preload="metadata"></video>
+              <div class="video-caption" id="videoCaption">选择右侧视频开始播放</div>
+            </div>
+            <div class="video-list" id="videoList"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-logs">
+          <div class="panel-head">
+            <div>
+              <h2>运行日志</h2>
+              <p>watch-server、WebSocket、ASR、LLM、TTS 的实时日志；空音频和超时也会在这里显示。</p>
+            </div>
+            <div class="row">
+              <select id="logLevel" title="日志级别">
+                <option value="">全部级别</option>
+                <option value="INFO">INFO</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+              </select>
+              <label class="check"><input id="logFollow" type="checkbox" checked>自动滚动</label>
+              <button class="btn ghost" id="logRefresh">刷新</button>
+              <button class="btn ghost" id="logClear">清空视图</button>
+            </div>
+          </div>
+          <div class="log-view" id="logView" aria-live="polite"></div>
+        </section>
+
+        <section class="panel" id="panel-status">
+          <div class="panel-head">
+            <div>
+              <h2>运行状态</h2>
+              <p>AI、TTS、ASR、媒体统计和鉴权状态。</p>
+            </div>
+            <button class="btn ghost" id="refreshStatus">刷新</button>
+          </div>
+          <div class="status-grid" id="statusGrid"></div>
+          <pre class="json-box" id="statusJson"></pre>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>
+

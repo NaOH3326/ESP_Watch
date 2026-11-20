@@ -1,0 +1,65 @@
+set(srcs
+    "src/watchshell.c"
+    "src/watch_config.c"
+    "src/watch_storage.c"
+    "src/watch_gfx.c"
+    "src/watch_font_cjk.c"
+    "src/watch_input.c"
+    "src/watch_term.c"
+    "src/watch_sensors.c"
+    "src/watch_audio.c"
+    "src/watch_net.c"
+    "src/watch_cloud.c"
+    "src/watch_script.c"
+    "src/watch_media.c"
+    "src/watch_video.c"
+    "src/watch_console.c"
+    "src/watch_power.c"
+    "src/watch_theme.c"
+    "src/watch_ui.c"
+    "src/app_watchface.c"
+    "src/app_ai.c"
+    "src/app_shell.c"
+    "src/app_sensors.c"
+    "src/app_media.c"
+    "src/app_games.c"
+    "src/app_settings.c"
+)
+
+set(reqs
+    factorytest
+    esp_audio_codec
+    esp_jpeg
+    esp_driver_gpio
+    esp_driver_i2c
+    esp_driver_i2s
+    esp_driver_ledc
+    esp_driver_spi
+    esp_lcd
+    esp_http_server
+    esp_http_client
+    esp_wifi
+    esp_netif
+    esp_event
+    lwip
+    esp_timer
+    esp_psram
+    esp_system
+    esp_hw_support
+    fatfs
+    wear_levelling
+    vfs
+    nvs_flash
+    cjson
+    console
+    tcp_transport
+    mbedtls
+    log
+    heap
+)
+
+idf_component_register(
+    SRCS ${srcs}
+    INCLUDE_DIRS "include"
+    REQUIRES ${reqs}
+)

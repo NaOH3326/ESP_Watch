@@ -1,0 +1,44 @@
+services:
+  watch-server:
+    build: .
+    container_name: esp-watch-server
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /data
+      PIPER_MODEL_DIR: /data/models/piper
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  # Optional local ASR: OpenAI-compatible faster-whisper server.
+  # Start with: docker compose --profile asr up -d
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    container_name: esp-watch-asr
+    profiles: ["asr"]
+    # The named model volume is root-owned; run as root so the
+    # unprivileged image user does not hit EACCES while downloading.
+    user: "0:0"
+    ports:
+      - "127.0.0.1:18000:8000"
+    environment:
+      ENABLE_UI: "false"
+      HF_HUB_CACHE: /models
+      PRELOAD_MODELS: '["Systran/faster-whisper-small"]'
+      STT_MODEL_TTL: "-1"
+      # Speaches reads the model TTL from WHISPER__TTL (STT_MODEL_TTL is
+      # ignored by current releases).  -1 keeps faster-whisper resident.
+      WHISPER__TTL: "-1"
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE: int8
+      WHISPER__CPU_THREADS: "2"
+      WHISPER__NUM_WORKERS: "1"
+    volumes:
+      - asr-cache:/models
+    restart: unless-stopped
+
+volumes:
+  asr-cache:

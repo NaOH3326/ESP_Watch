@@ -1,0 +1,13 @@
+# name: cmatrix
+# desc: cmatrix-style scrolling rain (PWR / STOP to quit)
+clear
+prompt "Wake up, Neo..."
+echo green "WAKE UP, NEO..."
+echo dim "the watch has you"
+sleep 900
+clear
+prompt "matrix>"
+label rain
+matrix
+sleep 60
+goto rain

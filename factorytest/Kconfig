@@ -1,0 +1,49 @@
+menu "Factory test"
+
+    config FACTORY_TEST_MODE
+        bool "Enable factory test firmware (interactive REPL)"
+        default n
+        help
+            编译并运行工厂测试固件。关闭后 main.c 的 app_main 为空，
+            测试入口不会被调用；组件仍参与构建，链接器会丢弃未引用代码。
+
+    if FACTORY_TEST_MODE
+
+        config FT_LCD_WIDTH
+            int "LCD width"
+            range 80 480
+            default 240
+
+        config FT_LCD_HEIGHT
+            int "LCD height"
+            range 80 480
+            default 284
+
+        config FT_LCD_X_OFFSET
+            int "LCD X offset"
+            default 0
+
+        config FT_LCD_Y_OFFSET
+            int "LCD Y offset"
+            default 0
+
+        config FT_LCD_SPI_MHZ
+            int "LCD SPI clock (MHz)"
+            range 10 80
+            default 40
+
+        config FT_LCD_MAX_BRIGHTNESS
+            int "Default backlight (%)"
+            range 0 100
+            default 70
+
+        config FT_ECHO_GAIN_X10
+            int "Audio echo gain x10"
+            range 1 20
+            default 8
+            help
+                麦克风回显增益，单位 0.1（8 = x0.8）。过大会产生啸叫。
+
+    endif
+
+endmenu

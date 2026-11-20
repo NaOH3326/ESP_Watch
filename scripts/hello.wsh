@@ -1,0 +1,7 @@
+# name: hello
+# desc: colored echo demo
+clear
+echo green "WATCHSHELL / ESP32-S3"
+echo "inline {red}red{/} {cyan}cyan{/} {amber}amber{/}"
+echo dim "----------------------------------------"
+echo "root@esp-watch:~# ready."

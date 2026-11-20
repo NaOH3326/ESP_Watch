@@ -1,0 +1,8 @@
+# name: sensors
+# desc: IMU / compass / AHT20 snapshot
+clear
+echo amber "SENSOR SNAPSHOT"
+sensors
+batt
+date
+echo dim "done."

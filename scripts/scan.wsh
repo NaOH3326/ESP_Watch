@@ -1,0 +1,5 @@
+# name: scan
+# desc: Wi-Fi scan
+clear
+echo green "WIFI SCAN"
+wifi scan

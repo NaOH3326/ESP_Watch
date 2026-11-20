@@ -1,0 +1,9 @@
+# name: loop
+# desc: variable + goto demo
+clear
+set N 5
+label loop
+echo cyan "countdown ${N}"
+set N ${N}-1
+if N > 0 goto loop
+echo green "launch."
