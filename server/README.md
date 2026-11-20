@@ -157,6 +157,37 @@ python -m piper.download_voices --help
 python -m piper.download_voices zh_CN-huayan-medium --data-dir ./data/models/piper
 ```
 
+### 面板上传 Piper 模型（推荐）
+
+打开 Dashboard 的 **TTS 语音 → Piper 模型管理**，一次上传：
+
+- `*.onnx`（模型本体）
+- `*.onnx.json`（同名的配置文件）
+
+上传后会立即出现在声音下拉框，并且默认设为手表 TTS 使用的当前声音。活动声音写入 `data/tts-voice.txt`，模型与配置保存在 `data/models/piper/`，重启容器不会丢失。
+
+同名模型默认拒绝覆盖；勾选“覆盖同名模型”才会替换。新模型最大 256 MB，可用 `MAX_TTS_MODEL_MB` 调整。也可以直接调用接口：
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "file=@zh_CN-huayan-medium.onnx" \
+  -F "config=@zh_CN-huayan-medium.onnx.json" \
+  -F "name=zh_CN-huayan-medium" \
+  -F "activate=1" \
+  http://127.0.0.1:8080/api/tts/voices
+```
+
+如果拿到的是 Piper 语音压缩包，先在本地解压，再上传其中的 `.onnx` 和 `.onnx.json`；不要只上传 `.onnx`，否则服务端会返回“缺少 Piper config”。
+
+也可以在宿主机直接放文件（Docker 的数据目录是 `server/data/models/piper/`）：
+
+```bash
+scp -P 22236 zh_CN-huayan-medium.onnx      naoh@121.199.23.188:~/ESP_Watch/server/data/models/piper/
+scp -P 22236 zh_CN-huayan-medium.onnx.json naoh@121.199.23.188:~/ESP_Watch/server/data/models/piper/
+```
+
+然后在面板刷新模型并选择声音即可。若设置了 `PIPER_MODEL` 指向某个固定 `.onnx` 文件，它会优先于面板选择；一般不要设置，让 Dashboard 管理。
+
 也可以在 `PIPER_URL` 指向已运行的 Piper HTTP 服务：
 
 ```bash
@@ -283,7 +314,7 @@ curl -s http://127.0.0.1:8080/api/status | python3 -m json.tool
 | 页面 | 能力 |
 |---|---|
 | AI 对话 | DeepSeek API，流式输出，多轮上下文 |
-| TTS 语音 | 输入文本、选声音、生成 WAV、试听、下载 |
+| TTS 语音 | 输入文本、选声音、生成 WAV、试听、下载；上传/切换/删除 Piper 模型 |
 | 文件上传 | 拖拽、多文件、进度、分类筛选、删除 |
 | 视频播放 | 浏览器直接 Range 播放 MP4/WebM |
 | 运行日志 | 轮询 `/api/logs`，显示 WebSocket / ASR / LLM / TTS 日志 |
@@ -302,7 +333,10 @@ curl -s http://127.0.0.1:8080/api/status | python3 -m json.tool
 | GET | `/api/logs` | Dashboard 运行日志（需要 Admin Token） |
 | GET | `/api/ai/providers` | DeepSeek 可用性 |
 | POST | `/api/chat` | 流式 SSE 或 `stream:false` JSON |
-| GET | `/api/tts/voices` | Piper/CosyVoice 声音 |
+| GET | `/api/tts/voices` | Piper/CosyVoice 声音，含大小/配置/默认状态 |
+| POST | `/api/tts/voices` | multipart 上传 Piper `.onnx` + `.onnx.json` |
+| POST | `/api/tts/voices/{voice}/select` | 设为手表默认 TTS 声音 |
+| DELETE | `/api/tts/voices/{voice}` | 删除本地 Piper 声音 |
 | POST | `/api/tts` | 合成 WAV |
 | GET | `/api/files?kind=video` | 文件列表 |
 | POST | `/api/files` | multipart 上传，字段 `file` / `kind` / `title` |
@@ -355,6 +389,7 @@ server/
 data/watch.db
 data/files/
 data/models/piper/
+data/tts-voice.txt     # Dashboard 选中的默认 Piper 声音
 data/tts-cache/
 ```
 

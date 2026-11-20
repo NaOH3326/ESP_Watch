@@ -115,6 +115,33 @@
               <p class="muted" id="ttsDetail">Piper 模型未配置时，接口会返回 503。</p>
             </div>
           </div>
+          <div class="card tts-model-card">
+            <div class="panel-head compact-head">
+              <div>
+                <h2>Piper 模型管理</h2>
+                <p>上传 Piper 声音后，可设为手表默认 TTS；文件保存在 <code>data/models/piper</code>。</p>
+              </div>
+              <span class="pill" id="ttsModelPill">local</span>
+            </div>
+            <div class="model-upload-grid">
+              <label class="field">模型文件 <code>.onnx</code>
+                <input id="ttsModelFile" type="file" accept=".onnx,application/octet-stream">
+              </label>
+              <label class="field">配置文件 <code>.onnx.json</code>（新声音必传）
+                <input id="ttsConfigFile" type="file" accept=".json,.onnx.json,application/json">
+              </label>
+              <label class="field">声音名（留空取文件名）
+                <input id="ttsModelName" placeholder="例如 my_zh_voice">
+              </label>
+            </div>
+            <div class="row">
+              <button class="btn primary" id="ttsUpload">上传并启用</button>
+              <button class="btn ghost" id="ttsModelRefresh">刷新模型</button>
+              <button class="btn ghost" id="ttsModelDelete">删除当前声音</button>
+              <label class="check"><input id="ttsOverwrite" type="checkbox">覆盖同名模型</label>
+              <span class="hint" id="ttsModelHint">支持直接上传 Hugging Face 下载的 .onnx 与 .onnx.json。</span>
+            </div>
+          </div>
         </section>
 
         <section class="panel" id="panel-files">

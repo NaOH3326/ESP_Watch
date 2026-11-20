@@ -359,6 +359,7 @@
     try {
       const data = await apiJson("/api/tts/voices");
       const select = $("#ttsVoice");
+      const previous = select.value;
       select.innerHTML = "";
       const voices = data.voices || [];
       if (!voices.length) {
@@ -367,16 +368,85 @@
         select.appendChild(option);
       } else {
         voices.forEach((voice) => {
-          const option = el("option", "", voice.name || voice.id);
+          const suffix = voice.active ? " · 默认" : (voice.has_config === false ? " · 缺配置" : "");
+          const option = el("option", "", (voice.name || voice.id) + suffix);
           option.value = voice.id;
           select.appendChild(option);
         });
+        const active = voices.find((voice) => voice.active);
+        const selected = voices.some((voice) => voice.id === previous)
+          ? previous
+          : (active?.id || voices[0].id);
+        select.value = selected;
       }
+      const pill = $("#ttsModelPill");
+      pill.textContent = voices.length ? voices.length + " voices" : "no model";
+      pill.className = "pill " + (voices.length ? "ok" : "err");
+      $("#ttsModelDelete").disabled = !voices.length;
       if (state.status?.tts?.available === false) {
         $("#ttsHint").textContent = state.status.tts.detail || "TTS 未配置";
       }
     } catch (error) {
       if (error.message !== "需要 ADMIN_TOKEN") toast(error.message, true);
+    }
+  }
+
+  async function uploadTtsVoice() {
+    const file = $("#ttsModelFile").files[0];
+    if (!file) { toast("请选择 .onnx 模型文件", true); return; }
+    const form = new FormData();
+    form.append("file", file);
+    const config = $("#ttsConfigFile").files[0];
+    if (config) form.append("config", config);
+    const name = $("#ttsModelName").value.trim();
+    if (name) form.append("name", name);
+    form.append("activate", "1");
+    if ($("#ttsOverwrite").checked) form.append("overwrite", "1");
+    const button = $("#ttsUpload");
+    button.disabled = true;
+    $("#ttsModelHint").textContent = "上传中…";
+    try {
+      const result = await apiJson("/api/tts/voices", { method: "POST", body: form });
+      $("#ttsModelFile").value = "";
+      $("#ttsConfigFile").value = "";
+      $("#ttsModelName").value = "";
+      $("#ttsOverwrite").checked = false;
+      $("#ttsModelHint").textContent = "已上传并启用：" + result.voice.name;
+      await loadVoices();
+      await refreshStatus();
+      toast("TTS 模型已上传");
+    } catch (error) {
+      $("#ttsModelHint").textContent = error.message;
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function selectTtsVoice() {
+    const voice = $("#ttsVoice").value;
+    if (!voice) return;
+    try {
+      await apiJson("/api/tts/voices/" + encodeURIComponent(voice) + "/select", { method: "POST" });
+      $("#ttsModelHint").textContent = "当前默认声音：" + voice;
+      await loadVoices();
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
+  async function deleteTtsVoice() {
+    const voice = $("#ttsVoice").value;
+    if (!voice) return;
+    if (!window.confirm("删除 Piper 声音 \"" + voice + "\"？")) return;
+    try {
+      await api("/api/tts/voices/" + encodeURIComponent(voice), { method: "DELETE" });
+      $("#ttsModelHint").textContent = "已删除：" + voice;
+      await loadVoices();
+      await refreshStatus();
+      toast("TTS 模型已删除");
+    } catch (error) {
+      toast(error.message, true);
     }
   }
 
@@ -598,6 +668,10 @@
       }
     });
     $("#ttsSpeak").addEventListener("click", speak);
+    $("#ttsUpload").addEventListener("click", uploadTtsVoice);
+    $("#ttsModelRefresh").addEventListener("click", () => loadVoices().catch((error) => toast(error.message, true)));
+    $("#ttsModelDelete").addEventListener("click", deleteTtsVoice);
+    $("#ttsVoice").addEventListener("change", selectTtsVoice);
     const dropzone = $("#dropzone");
     const input = $("#fileInput");
     dropzone.addEventListener("click", () => input.click());

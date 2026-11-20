@@ -62,6 +62,7 @@ class Settings:
     tts_cache_dir: Path | None = None
 
     max_upload_mb: int = field(default_factory=lambda: _env_int("MAX_UPLOAD_MB", 512))
+    max_tts_model_mb: int = field(default_factory=lambda: _env_int("MAX_TTS_MODEL_MB", 256))
     admin_token: str = field(default_factory=lambda: _env_str("ADMIN_TOKEN"))
     watch_token: str = field(default_factory=lambda: _env_str("WATCH_TOKEN"))
 
@@ -130,6 +131,8 @@ class Settings:
         )
         if self.max_upload_mb < 1:
             self.max_upload_mb = 1
+        if self.max_tts_model_mb < 1:
+            self.max_tts_model_mb = 256
         if self.watch_video_width < 16:
             self.watch_video_width = 204
         if self.watch_video_height < 16:
@@ -156,6 +159,10 @@ class Settings:
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
 
+    @property
+    def max_tts_model_bytes(self) -> int:
+        return self.max_tts_model_mb * 1024 * 1024
+
     def public_summary(self) -> dict:
         """Safe configuration snapshot for /api/status."""
         return {
@@ -170,6 +177,7 @@ class Settings:
             "asr_provider": self.asr_provider,
             "asr_model": self.asr_model,
             "max_upload_mb": self.max_upload_mb,
+            "max_tts_model_mb": self.max_tts_model_mb,
             "auth_required": bool(self.admin_token),
             "watch_auth_required": bool(self.watch_token),
         }

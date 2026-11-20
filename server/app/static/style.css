@@ -171,6 +171,10 @@ label.field > input, label.field > textarea, label.field > select { margin-top: 
 .send-btn { min-width: 88px; }
 
 .grid-two { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); gap: 18px; }
+.tts-model-card { margin-top: 18px; }
+.tts-model-card .compact-head { margin: 0 0 14px; }
+.tts-model-card .compact-head h2 { margin: 0 0 4px; }
+.model-upload-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(150px, .6fr); gap: 12px; }
 .wave-box {
   height: 84px; display: flex; align-items: center; justify-content: center; gap: 5px;
   margin: 8px 0 14px; border: 1px dashed var(--line); border-radius: 10px;
@@ -292,6 +296,7 @@ audio { width: 100%; margin: 4px 0 12px; }
   .sidebar-foot { display: none; }
   .main { padding: 18px 15px 40px; }
   .chat-toolbar, .grid-two, .video-layout { grid-template-columns: 1fr; }
+  .model-upload-grid { grid-template-columns: 1fr; }
   .chat-messages { max-height: 55vh; min-height: 320px; }
   .topbar h1 { font-size: 21px; }
   .log-row { grid-template-columns: 62px 54px minmax(0, 1fr); }

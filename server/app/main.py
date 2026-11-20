@@ -213,7 +213,38 @@ def create_app(
 
     @app.get("/api/tts/voices", dependencies=[Depends(admin)])
     async def tts_voices():
-        return {"voices": tts.voices(), "provider": settings.tts_provider}
+        return {
+            "voices": tts.voices(),
+            "provider": settings.tts_provider,
+            "active": tts.status().get("voice", ""),
+        }
+
+    @app.post("/api/tts/voices", dependencies=[Depends(admin)])
+    async def upload_tts_voice(
+        file: UploadFile = File(...),
+        config: UploadFile | None = File(None),
+        name: str = Form(""),
+        activate: bool = Form(True),
+        overwrite: bool = Form(False),
+    ):
+        voice = await tts.upload_voice(
+            file,
+            config,
+            name=name,
+            activate=activate,
+            overwrite=overwrite,
+        )
+        return JSONResponse(status_code=201, content={"voice": voice, "voices": tts.voices()})
+
+    @app.post("/api/tts/voices/{voice_name}/select", dependencies=[Depends(admin)])
+    async def select_tts_voice(voice_name: str):
+        voice = tts.select_voice(voice_name)
+        return {"voice": voice, "voices": tts.voices()}
+
+    @app.delete("/api/tts/voices/{voice_name}", dependencies=[Depends(admin)])
+    async def delete_tts_voice(voice_name: str):
+        result = tts.delete_voice(voice_name)
+        return {**result, "voices": tts.voices()}
 
     @app.get("/api/tts/status", dependencies=[Depends(admin)])
     async def tts_status():
