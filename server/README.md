@@ -62,6 +62,68 @@ Dashboard 的 **运行日志** 页面也会实时显示 WebSocket、ASR、LLM、
 docker compose down
 ```
 
+### 国内网络环境
+
+Dockerfile 默认已经把两处最容易卡住的源改成国内镜像：
+
+- base image 的 Debian apt 源：`mirrors.aliyun.com`
+- pip 源：`pypi.tuna.tsinghua.edu.cn`
+
+如果你的 Docker Hub 拉取 `python:3.12-slim` 很慢，先在阿里云容器镜像服务控制台获取专属加速地址，然后配置：
+
+```bash
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
+{
+  "registry-mirrors": ["https://<你的ID>.mirror.aliyuncs.com"]
+}
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+```
+
+> 重启 Docker 可能影响这台机器上的其他容器；也可以在低峰期操作。
+
+国内服务器不建议让 Piper 自动从 Hugging Face 下载。设置：
+
+```dotenv
+AUTO_DOWNLOAD_PIPER=0
+```
+
+在本机从 `hf-mirror.com` 下载 `zh_CN-huayan-medium`：
+
+```bash
+wget -L -c \
+  "https://hf-mirror.com/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx?download=true" \
+  -O zh_CN-huayan-medium.onnx
+wget -L -c \
+  "https://hf-mirror.com/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json?download=true" \
+  -O zh_CN-huayan-medium.onnx.json
+```
+
+然后在**本机**建立 SSH 隧道，打开 Dashboard 上传模型：
+
+```bash
+ssh -N -L 18080:127.0.0.1:8080 -p 22236 naoh@121.199.23.188
+```
+
+浏览器访问 `http://127.0.0.1:18080`，到 **TTS 语音 → Piper 模型管理** 上传 `.onnx` 和 `.onnx.json`。这样服务器完全不需要访问 Hugging Face，也不需要把 8080 暴露到公网。
+
+如果服务器构建镜像时内存不够，可以在本机构建后传镜像：
+
+```bash
+# 本机
+cd server
+docker compose build
+docker save server-watch-server:latest | gzip > /tmp/watch-server.tar.gz
+scp -P 22236 /tmp/watch-server.tar.gz naoh@121.199.23.188:/tmp/
+
+# 服务器
+gunzip -c /tmp/watch-server.tar.gz | docker load
+cd ~/ESP_Watch/server
+docker compose up -d --no-build
+```
+
 ### 使用 DeepSeek
 
 AI 对话现在**只有 DeepSeek**，不再需要 Ollama；服务端不加载本地 LLM。

@@ -1,5 +1,8 @@
 watch.example.com {
     encode zstd gzip
+    # If Caddy runs in the same Docker Compose network, keep
+    # watch-server:8080.  If Caddy runs on the host or uses
+    # --network host, change this to 127.0.0.1:8080.
     reverse_proxy watch-server:8080 {
         # Important for SSE chat and WSV2 chunked video.
         flush_interval -1
