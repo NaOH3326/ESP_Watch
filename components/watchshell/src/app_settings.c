@@ -143,8 +143,6 @@ static void settings_render(void)
     ws_net_status_t n;
     watch_net_status(&n);
     ws_power_t p = watch_sensors_power();
-    char ai[64] = {0};
-    watch_config_get_ai(ai, sizeof(ai), NULL, 0);
 
     char idle_label[16];
     int idle = watch_power_idle_seconds();
@@ -163,10 +161,7 @@ static void settings_render(void)
     watch_gfx_printf(WS_SAFE, 90, WS_COLOR_GRAY, 1, "THEME %s  EGG %s",
                      watch_theme_name(),
                      watch_theme_error_unlocked() ? "UNLOCKED" : "LOCKED");
-    watch_gfx_printf(WS_SAFE, 102, WS_COLOR_GRAY, 1, "AI URL");
-    ws_app_wrap_text(WS_SAFE, 114, 36, ai[0] ? ai : "not configured", WS_COLOR_CYAN, 1);
-
-    watch_gfx_text(WS_SAFE, 134, "L/R SEL PWR RUN HOLD 1.2 MENU", WS_COLOR_DIM, 1);
+    watch_gfx_text(WS_SAFE, 104, "L/R SEL PWR RUN HOLD 1.2 MENU", WS_COLOR_DIM, 1);
 
     sbtn(WS_SAFE, BTN_TOP, "PORTAL", WS_COLOR_CYAN, 0);
     sbtn(WS_SAFE + BTN_STEP_X, BTN_TOP, "RECONN", WS_COLOR_GREEN, 1);
