@@ -25,6 +25,10 @@
 #define MEDIA_VIDEO_BTN_Y   250
 #define MEDIA_VIDEO_BTN_W   68
 #define MEDIA_VIDEO_BTN_H   22
+#define MEDIA_MUSIC_BTN_Y   250
+#define MEDIA_MUSIC_BTN_W   42
+#define MEDIA_MUSIC_BTN_H   22
+#define MEDIA_MUSIC_BTN_STEP 44
 
 static char s_files[24][48];
 static int s_count;
@@ -322,9 +326,15 @@ static void media_event(const ws_event_t *ev)
         return;
     }
     if (s_tab == 0 && ev->y > 246) {
-        if (ev->x < 82) {
+        int x = ev->x - WS_SAFE;
+        if (x < MEDIA_MUSIC_BTN_STEP) {
+            watch_media_catalog_fetch();
+            refresh();
+        } else if (x < 2 * MEDIA_MUSIC_BTN_STEP) {
+            play_selected();
+        } else if (x < 3 * MEDIA_MUSIC_BTN_STEP) {
             watch_media_stop();
-        } else if (ev->x < 158) {
+        } else if (x < 4 * MEDIA_MUSIC_BTN_STEP) {
             int v = watch_audio_volume() - 10;
             if (v < 0) v = 0;
             watch_audio_set_volume(v);
@@ -423,9 +433,10 @@ static void media_render(void)
         watch_gfx_text_center(x + MEDIA_TAB_W / 2, 27, tab_names[i],
                               sel ? WS_COLOR_BLACK : WS_COLOR_GRAY, 1);
     }
-    const char *right = s_tab == 0 ? (watch_media_busy() ? "PLAYING" : "STOP") :
-                        (s_tab == 1 ? "JPG TAP=FULL" :
-                         watch_video_state_name(vs.state));
+    const char *right = s_tab == 0 ?
+        (watch_media_busy() ? "PLAYING" : (s_music_remote ? "CLOUD" : "LOCAL")) :
+        (s_tab == 1 ? "JPG TAP=FULL" :
+         watch_video_state_name(vs.state));
     uint16_t right_color = s_tab == 0 && watch_media_busy() ? WS_COLOR_GREEN :
                            (s_tab == 2 && vs.connected ? WS_COLOR_GREEN :
                             (s_tab == 2 && vs.state == WS_VIDEO_ERROR ? WS_COLOR_RED :
@@ -487,12 +498,17 @@ static void media_render(void)
         } else {
             watch_gfx_text(WS_SAFE, 186, "nothing playing", WS_COLOR_GRAY, 1);
         }
-        watch_gfx_rect(WS_SAFE, 250, 72, 22, WS_COLOR_RED);
-        watch_gfx_text_center(WS_SAFE + 36, 256, "STOP", WS_COLOR_RED, 1);
-        watch_gfx_rect(WS_SAFE + 74, 250, 72, 22, WS_COLOR_CYAN);
-        watch_gfx_text_center(WS_SAFE + 110, 256, "VOL -", WS_COLOR_CYAN, 1);
-        watch_gfx_rect(WS_SAFE + 148, 250, 72, 22, WS_COLOR_CYAN);
-        watch_gfx_text_center(WS_SAFE + 184, 256, "VOL +", WS_COLOR_CYAN, 1);
+        static const char *const labels[] = {"SYNC", "PLAY", "STOP", "VOL-", "VOL+"};
+        static const uint16_t colors[] = {
+            WS_COLOR_CYAN, WS_COLOR_GREEN, WS_COLOR_RED, WS_COLOR_CYAN, WS_COLOR_CYAN
+        };
+        for (int i = 0; i < 5; i++) {
+            int bx = WS_SAFE + i * MEDIA_MUSIC_BTN_STEP;
+            watch_gfx_rect(bx, MEDIA_MUSIC_BTN_Y, MEDIA_MUSIC_BTN_W,
+                           MEDIA_MUSIC_BTN_H, colors[i]);
+            watch_gfx_text_center(bx + MEDIA_MUSIC_BTN_W / 2,
+                                  MEDIA_MUSIC_BTN_Y + 6, labels[i], colors[i], 1);
+        }
     } else if (s_tab == 1) {
         watch_gfx_hline(WS_SAFE, 90, WS_SCREEN_W - 2 * WS_SAFE, WS_COLOR_DIM);
         if (s_img && s_img_w > 0 && s_img_h > 0) {
