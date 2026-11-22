@@ -82,7 +82,7 @@ idf.py build flash monitor
 1. 设置 Wi-Fi SSID / 密码（保存后自动重启，切到 STA 模式）。
 2. 设置 AI WebSocket URL / token（自建 `xiaozhi-esp32-server` 时填写）。
 3. 设置视频目录 URL / token（可选；手表主动拉流时使用，见 `Doc/VIDEO_STREAM.md`）。
-4. 上传 `.wsh` 脚本到 `/storage/scripts/`。
+4. 上传 `.wsh` / `.sh` 脚本到 `/storage/scripts/`。
 5. 上传 `.mp3` / `.wav` / `.aac` 到 `/storage/music/`。
 6. 上传 `.jpg` / `.jpeg`（PNG/WebP 在浏览器里也会转成 JPG）到 `/storage/video/`（Media → PICTURES 显示）；浏览器会先用 Canvas 缩放到最大 440×276 并重新编码为 JPEG，固件只做兼容解码。单个文件最大 6 MB，固件按 4 KB 流式写盘，不会整包占用 RAM。
 
@@ -134,7 +134,7 @@ App：
 | AI | 首屏显示连接状态与 `OPEN CHAT`；进入独立聊天页后，按住底部条说话，显示 ASR 回显、DeepSeek 流式文字和 TTS 回复；支持消息滚动与中文 14px 点阵 |
 | SHELL | 脚本列表、UP/DOWN/EXEC/STOP、输出滚动、彩色 echo |
 | SENSORS | MOTION / COMPASS / ENV / SYSTEM 四页；罗盘 8 秒校准 |
-| MEDIA | MUSIC（MP3/WAV）、PICTURES（JPG/JPEG，支持浏览、全屏和两次确认删除）、VIDEO（HTTP 视频目录 + 主动拉流；兼容 WSV2 TCP 推送；支持全屏） |
+| MEDIA | MUSIC（MP3/WAV）、PICTURES（JPG/JPEG，支持浏览、全屏和两次确认删除）、VIDEO（WebSocket/HTTP 视频目录 + 主动拉流；兼容 WSV2 TCP 推送；支持全屏） |
 | GAMES | 贪吃蛇、2048、MATRIX 全屏长字符串字符雨、HEX 二维 IMU 六边形、FLASK 密闭容器水面，支持触摸滑动/按键 |
 | SETTINGS | Wi-Fi、Portal、主题、空闲关机、亮度、音量、关机、重启；按钮加大，支持左右键选择 + PWR 执行 |
 
@@ -182,7 +182,7 @@ waiting for download
 
 - PICTURES 和 VIDEO 页点击画面区域进入全屏（隐藏状态栏/Tab/控件），点屏幕或短按 PWR 退出。
 - 全屏画面使用 cover 方式铺满 240×284，超出部分裁切。
-- **主动拉流（推荐）**：进入 `MEDIA → VIDEO` 后自动请求视频目录；点条目或 `PLAY` 由手表主动打开该条目的 HTTP 流。`SYNC` 重新取列表，`STOP` 断开。
+- **主动拉流（推荐）**：进入 `MEDIA → VIDEO` 后自动请求视频目录；点条目或 `PLAY` 由手表优先连接该条目的 WebSocket 流（`ws_url`），兼容旧服务器时回退到 HTTP 流（`stream_url`）。`SYNC` 重新取列表，`STOP` 断开。
 - 目录 URL 在 Portal 的 `VIDEO CATALOG` 配置，例如 `http://192.168.1.10:8080/watch/api/v1/videos`；token 可选。
 - 服务器把 MP4/H.264 转码成 `WSV2`：20 字节帧头 + baseline JPEG 或 `s16le mono 16 kHz` PCM，放在 HTTP chunked body 里。
 - 兼容模式仍保留：进入 VIDEO 页后，手表在 TCP `3333` 端口等待发送端。
@@ -200,7 +200,7 @@ waiting for download
 
 ## 4. Shell 脚本
 
-脚本放在 `/storage/scripts/*.wsh`，由外部编辑后通过网页上传。Shell 不提供键盘，
+脚本放在 `/storage/scripts/*.wsh` 或 `*.sh`，由外部编辑后通过网页上传。Shell 不提供键盘，
 只负责选择、执行和滚动输出。
 
 ```text
@@ -263,7 +263,7 @@ storage   0x320000  13.5 MB  FATFS (/storage)
 - 没有 SD 卡；媒体文件放 FAT 分区或通过网页上传。
 - 音频功放输出前端/增益电阻仍在硬件排查中，低音量破音先按硬件问题处理。
 - PICTURES 当前是 JPG/JPEG 静态图，不是 MJPEG 连续视频；解码器只支持 baseline JPEG，渐进式 JPEG、HEIC、PNG 需要先转换。
-- VIDEO 支持 HTTP 视频目录 + 主动拉流，也兼容自定义 WSV2 发送端（JPEG + PCM16 16 kHz mono）；没有内置摄像头/视频文件解码器，服务器必须转码。
+- VIDEO 支持 WebSocket/HTTP 视频目录 + 主动拉流，也兼容自定义 WSV2 发送端（JPEG + PCM16 16 kHz mono）；没有内置摄像头/视频文件解码器，服务器必须转码。
 - 中文聊天已内置 14px GB2312 点阵；未覆盖的生僻字/Emoji 仍可能显示为空白。
 
 ## 8. 硬件资料

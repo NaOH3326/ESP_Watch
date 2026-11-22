@@ -13,9 +13,25 @@
 static const char *TAG = "WATCH_AUDIO";
 static i2s_chan_handle_t s_tx;
 static i2s_chan_handle_t s_rx;
-static bool s_ready;
+static volatile bool s_ready;
 static int s_volume = 60;
 static SemaphoreHandle_t s_lock;
+static StaticSemaphore_t s_lock_storage;
+static portMUX_TYPE s_lock_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/* One mutex guards I2S init and all writes.  Video, music, scripts and AI TTS
+ * all call watch_audio_write() from different tasks.  The old code checked
+ * s_ready and called i2s_new_channel() unprotected; two callers could create
+ * two I2S ports, and the loser's failure path deleted the winner's channels.
+ * That left s_ready=false and every later AI PTT reported "audio init". */
+static SemaphoreHandle_t audio_lock(void)
+{
+    if (s_lock) return s_lock;
+    taskENTER_CRITICAL(&s_lock_mux);
+    if (!s_lock) s_lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
+    taskEXIT_CRITICAL(&s_lock_mux);
+    return s_lock;
+}
 
 static void apply_gain(int16_t *samples, int n)
 {
@@ -27,15 +43,17 @@ static void apply_gain(int16_t *samples, int n)
     }
 }
 
-esp_err_t watch_audio_init(void)
+static esp_err_t init_locked(void)
 {
     if (s_ready) return ESP_OK;
-    if (!s_lock) s_lock = xSemaphoreCreateMutex();
+
+    i2s_chan_handle_t tx = NULL;
+    i2s_chan_handle_t rx = NULL;
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = 6;
     chan_cfg.dma_frame_num = 240;
     chan_cfg.auto_clear = true;
-    esp_err_t err = i2s_new_channel(&chan_cfg, &s_tx, &s_rx);
+    esp_err_t err = i2s_new_channel(&chan_cfg, &tx, &rx);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2s_new_channel: %s", esp_err_to_name(err));
         return err;
@@ -52,21 +70,43 @@ esp_err_t watch_audio_init(void)
             .invert_flags = { false, false, false },
         },
     };
-    if ((err = i2s_channel_init_std_mode(s_tx, &cfg)) != ESP_OK ||
-        (err = i2s_channel_init_std_mode(s_rx, &cfg)) != ESP_OK ||
-        (err = i2s_channel_enable(s_tx)) != ESP_OK ||
-        (err = i2s_channel_enable(s_rx)) != ESP_OK) {
+    if ((err = i2s_channel_init_std_mode(tx, &cfg)) != ESP_OK ||
+        (err = i2s_channel_init_std_mode(rx, &cfg)) != ESP_OK ||
+        (err = i2s_channel_enable(tx)) != ESP_OK ||
+        (err = i2s_channel_enable(rx)) != ESP_OK) {
         ESP_LOGE(TAG, "I2S init: %s", esp_err_to_name(err));
-        watch_audio_deinit();
+        if (tx) {
+            i2s_channel_disable(tx);
+            i2s_del_channel(tx);
+        }
+        if (rx) {
+            i2s_channel_disable(rx);
+            i2s_del_channel(rx);
+        }
         return err;
     }
+    s_tx = tx;
+    s_rx = rx;
     s_ready = true;
     ESP_LOGI(TAG, "I2S %d Hz stereo ready", WS_AUDIO_RATE);
     return ESP_OK;
 }
 
+esp_err_t watch_audio_init(void)
+{
+    if (s_ready) return ESP_OK;
+    SemaphoreHandle_t lock = audio_lock();
+    if (!lock) return ESP_ERR_NO_MEM;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    esp_err_t err = init_locked();
+    xSemaphoreGive(lock);
+    return err;
+}
+
 void watch_audio_deinit(void)
 {
+    SemaphoreHandle_t lock = audio_lock();
+    if (lock) xSemaphoreTake(lock, portMAX_DELAY);
     if (s_tx) {
         i2s_channel_disable(s_tx);
         i2s_del_channel(s_tx);
@@ -78,6 +118,7 @@ void watch_audio_deinit(void)
         s_rx = NULL;
     }
     s_ready = false;
+    if (lock) xSemaphoreGive(lock);
 }
 
 bool watch_audio_ready(void) { return s_ready; }
@@ -115,7 +156,11 @@ static esp_err_t write_stereo(const int16_t *mono, int frames)
 
 esp_err_t watch_audio_read(int16_t *mono, int frames, int timeout_ms)
 {
-    if (!s_ready || !mono || frames <= 0) return ESP_ERR_INVALID_ARG;
+    if (!mono || frames <= 0) return ESP_ERR_INVALID_ARG;
+    if (!s_ready) {
+        esp_err_t err = watch_audio_init();
+        if (err != ESP_OK) return err;
+    }
     int16_t buf[480 * 2];
     int done = 0;
     while (done < frames) {
@@ -171,13 +216,16 @@ static esp_err_t write_resampled(const int16_t *mono, int frames, int rate)
 
 esp_err_t watch_audio_write(const int16_t *mono, int frames, int rate)
 {
-    if (!s_ready) {
-        esp_err_t err = watch_audio_init();
-        if (err != ESP_OK) return err;
+    if (!mono || frames <= 0) return ESP_ERR_INVALID_ARG;
+    SemaphoreHandle_t lock = audio_lock();
+    if (!lock) return ESP_ERR_NO_MEM;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    esp_err_t err = ESP_OK;
+    if (!s_ready) err = init_locked();
+    if (err == ESP_OK) {
+        err = write_resampled(mono, frames, rate);
     }
-    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
-    esp_err_t err = write_resampled(mono, frames, rate);
-    if (s_lock) xSemaphoreGive(s_lock);
+    xSemaphoreGive(lock);
     return err;
 }
 

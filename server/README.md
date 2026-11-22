@@ -9,7 +9,7 @@
 - **TTS**：默认 Piper 本地合成，可选 CosyVoice HTTP 适配器；
 - **Dashboard**：AI 对话、TTS 试听、文件上传、视频播放、运行日志、运行状态；
 - **文件上传**：流式写盘、分类、Range 下载、删除；
-- **手表视频**：保留 `VIDEO CATALOG` + `WSV2` 主动拉流协议；
+- **手表视频**：`VIDEO CATALOG` 返回 `ws_url`；手表优先走 WebSocket（JPEG+PCM 每帧一条 binary message），`stream_url` 保留 HTTP WSV2 兼容回退；
 - **手表 AI**：兼容固件的 `/v1/ws` WebSocket 协议（hello / listen / STT / LLM / TTS / Opus）。
 
 ## 1. 架构
@@ -17,7 +17,8 @@
 ```text
 ESP32 Watch ── WSS /v1/ws ─────────────┐
       │                                 │
-      └─ HTTP /watch/api/v1/videos ─────┤
+      ├─ HTTP /watch/api/v1/videos ─────┤
+      └─ WSS /watch/api/v1/videos/*/ws ─┤
                                         ▼
                               FastAPI (single process)
                               ├─ SQLite metadata
@@ -45,6 +46,22 @@ docker compose up -d --build
 ```text
 http://<服务器 IP>:8080
 ```
+
+如果 8080 已被其他服务占用，不要停现有服务；在 `.env` 中改宿主端口：
+
+```dotenv
+# 只让本机/Caddy/SSH 隧道访问，避免占用公网 8080
+WATCH_BIND=127.0.0.1
+WATCH_PORT=18080
+```
+
+然后 `docker compose up -d --no-build`，Dashboard 地址变为：
+
+```text
+http://127.0.0.1:18080
+```
+
+如果直接暴露到局域网测试，可以把 `WATCH_BIND` 改回 `0.0.0.0`，并使用安全组放行对应端口。
 
 Piper 声音默认在容器首次启动时自动下载到 `./data/models/piper`。如果主机不能访问 Hugging Face，可以先手动下载，或设置 `PIPER_URL` 指向已有的 Piper HTTP 服务。
 
@@ -83,6 +100,31 @@ sudo systemctl restart docker
 ```
 
 > 重启 Docker 可能影响这台机器上的其他容器；也可以在低峰期操作。
+
+注意：`docker compose build` 默认使用 BuildKit。部分 Docker 版本里，`daemon.json` 的 `registry-mirrors` 只对 `docker pull` 生效，**不会自动作用于 Dockerfile 的 `FROM` 拉取**。如果构建日志长时间停在：
+
+```text
+[1/9] FROM docker.io/library/python:3.12-slim
+```
+
+可以先从加速器拉基础镜像，并直接把 `BASE_IMAGE` 指向镜像地址：
+
+```bash
+docker pull <你的ID>.mirror.aliyuncs.com/library/python:3.12-slim
+
+cd ~/ESP_Watch/server
+docker compose build \
+  --build-arg BASE_IMAGE=<你的ID>.mirror.aliyuncs.com/library/python:3.12-slim
+```
+
+验证 `docker pull` 和 `docker compose build` 的差异：
+
+```bash
+# 如果这一条很快，说明镜像加速器本身没问题，问题在 BuildKit
+time docker pull python:3.12-slim
+```
+
+如果镜像加速器也没有 Python 基础镜像，或者服务器带宽仍然太差，直接使用下面的“本机构建后传镜像”方案。
 
 国内服务器不建议让 Piper 自动从 Hugging Face 下载。设置：
 
@@ -411,8 +453,9 @@ curl -s http://127.0.0.1:8080/api/status | python3 -m json.tool
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/watch/api/v1/videos` | 最多 16 条目录，标题截断 47 字节 |
-| GET | `/watch/api/v1/videos/{id}/stream` | `application/vnd.wsv2` chunked 流 |
+| GET | `/watch/api/v1/videos` | 最多 16 条目录，标题截断 47 字节；包含 `stream_url` 和 `ws_url` |
+| GET | `/watch/api/v1/videos/{id}/stream` | `application/vnd.wsv2` chunked 流（HTTP 兼容回退） |
+| WS | `/watch/api/v1/videos/{id}/ws` | WSV2 音视频 WebSocket 流；每条 binary message 一个帧 |
 | WS | `/v1/ws`、`/ai` | AI 实时通道 |
 
 `WATCH_TOKEN` 为空时允许无鉴权局域网访问；公网部署务必设置。
@@ -462,7 +505,7 @@ data/tts-cache/
 - **最低**：1 vCPU / 1 GB RAM，Dashboard 文字 + DeepSeek API（不在本机跑 LLM）+ Piper 小模型；
 - **推荐**：1–2 vCPU / 1–2 GB RAM，DeepSeek API + Piper；ASR 使用本地 Speaches 时额外占用 1–2 GB 内存；只用云端 ASR 则不占本机算力；
 - **视频**：同一时间只建议 1 路 WSV2 转码；WSV2 是 CPU 解码 + JPEG 编码，204×138 / 12 fps 的开销远低于实时 1080p；
-- 如果手表在**有音频**的视频上掉帧/卡死，先设置 `WATCH_VIDEO_AUDIO=0` 验证纯视频；同时建议更新固件：`watch_video.c` 已把 PCM 改为独立队列/播放任务，拉流线程不再被音频阻塞；
+- 如果手表在**有音频**的视频上掉帧/卡死，先设置 `WATCH_VIDEO_AUDIO=0` 验证纯视频；同时建议更新固件：新 `watch_video.c` 优先走 WebSocket，PCM 使用 16 帧独立队列 + 高优先级 `video_aud` 任务，并对 `watch_audio_init()` 加锁，避免视频后 I2S 初始化失败；
 - **不要**把上传目录放在内存盘；视频文件可能很大；
 - **反向代理**：Caddy 配置已设置 `flush_interval -1`，否则 SSE 和 WSV2 会被缓冲；
 - **Swap**：Piper 首次加载/视频转码可能短暂占用内存；如果仍在本机跑 TTS，低配机器建议 1 GB swap。
@@ -547,8 +590,10 @@ ws://<服务器 IP>:8080/v1/ws
 旧固件在 WSV2 拉流任务里同步执行 `watch_audio_write()`，20 ms 音频会阻塞约 20 ms，等于把拉流线程当作音频播放时钟，挤压 JPEG 解码和网络读取。当前 `watch_video.c` 已改为：
 
 ```text
-HTTP/JPEG 拉流任务 → PCM 队列 → 独立 video_aud 任务 → I2S
+WebSocket/HTTP 拉流任务 → 16 帧 PCM 队列 → 独立高优先级 video_aud 任务 → I2S
 ```
+
+WebSocket 模式下每条 binary message 是一个完整的 WSV2 帧，JPEG 和 PCM 在同一条连接中交错下发；旧服务端仍可回退 HTTP。
 
 需要重新编译并烧录固件：
 

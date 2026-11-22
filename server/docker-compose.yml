@@ -3,7 +3,8 @@ services:
     build: .
     container_name: esp-watch-server
     ports:
-      - "8080:8080"
+      # Use WATCH_BIND=127.0.0.1 when Caddy/Nginx/SSH tunnel is in front.
+      - "${WATCH_BIND:-0.0.0.0}:${WATCH_PORT:-8080}:8080"
     env_file:
       - .env
     environment:

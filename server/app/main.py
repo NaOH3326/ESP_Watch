@@ -13,11 +13,13 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import iterate_in_threadpool
+from starlette.websockets import WebSocketDisconnect
 
 from .ai import AIError, AIService
 from .asr import ASRError, ASRService
 from .audio import AudioError
-from .auth import admin_guard, check_watch_http
+from .auth import admin_guard, check_watch_http, check_watch_ws
 from .config import Settings
 from .db import Database
 from .logs import install_log_handler, LOG_BUFFER
@@ -331,6 +333,10 @@ def create_app(
                 "width": int(record.get("width") or settings.watch_video_width),
                 "height": int(record.get("height") or settings.watch_video_height),
                 "stream_url": "/watch/api/v1/videos/%s/stream" % record["id"],
+                # WebSocket is the preferred transport: one connection carries
+                # interleaved JPEG + PCM, no HTTP chunk framing, and the watch
+                # can stop by closing the socket immediately.
+                "ws_url": "/watch/api/v1/videos/%s/ws" % record["id"],
             })
         return {"version": 1, "items": items}
 
@@ -365,6 +371,60 @@ def create_app(
             media_type="application/vnd.wsv2",
             headers={"Cache-Control": "no-store", "Connection": "close"},
         )
+
+    @app.websocket("/watch/api/v1/videos/{media_id}/ws")
+    async def watch_stream_ws(websocket: WebSocket, media_id: str):
+        """Stream the same WSV2 frames as binary WebSocket messages.
+
+        Each message contains exactly one 20-byte WSV2 header + payload.  The
+        server waits for ``send_bytes`` backpressure, so the watch's TCP/WS
+        receive window (and its audio queue) paces the transcode loop.  This
+        avoids the old HTTP-chunked path where a slow watch could leave a
+        producer thread blocked in the ASGI threadpool until its timeout.
+        """
+        if not await check_watch_ws(websocket, settings):
+            logger.warning("watch video websocket rejected (bad token)")
+            return
+        await websocket.accept()
+        record = db.get(media_id)
+        if not record or record["kind"] != "video":
+            await websocket.close(code=4404, reason="video not found")
+            return
+        path = media.path_for(record)
+        if not path.is_file():
+            await websocket.close(code=4404, reason="video file is missing")
+            return
+
+        frames = stream_video(
+            path,
+            width=settings.watch_video_width,
+            height=settings.watch_video_height,
+            quality=settings.watch_video_quality,
+            audio_ms=settings.watch_audio_ms,
+            fps=settings.watch_video_fps,
+            enable_audio=settings.watch_video_audio,
+        )
+        logger.info("watch video ws start: client=%s title=%s",
+                    websocket.client.host if websocket.client else "?",
+                    record.get("title") or media_id)
+        try:
+            async for frame in iterate_in_threadpool(frames):
+                await websocket.send_bytes(frame)
+            await websocket.send_text('{"type":"eof"}')
+            await websocket.close(code=1000)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        except Exception:
+            logger.exception("WSV2 websocket stream failed for %s", media_id)
+            try:
+                await websocket.close(code=1011)
+            except Exception:
+                pass
+        finally:
+            close = getattr(frames, "close", None)
+            if close:
+                close()
+            logger.info("watch video ws stop: %s", media_id)
 
 
     @app.websocket("/v1/ws")

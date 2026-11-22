@@ -87,6 +87,56 @@ def test_watch_catalog_requires_token(client):
     ).status_code == 401
 
 
+def test_watch_video_websocket_streams_wsv2(client, monkeypatch):
+    import app.main as main_module
+    from app.wsv2 import TYPE_JPEG, TYPE_PCM16, WSV2_HEADER, WSV2_MAGIC
+
+    response = client.post(
+        "/api/files",
+        files={"file": ("clip.mp4", FAKE_VIDEO, "video/mp4")},
+    )
+    item = response.json()
+
+    def fake_stream(path, **kwargs):
+        payload = b"\xff\xd8fake-jpeg"
+        yield WSV2_HEADER.pack(
+            WSV2_MAGIC, TYPE_JPEG, 0, 204, 138, 0, 0, len(payload)
+        ) + payload
+        pcm = b"\x00\x01" * 320
+        yield WSV2_HEADER.pack(
+            WSV2_MAGIC, TYPE_PCM16, 0, 0, 0, 0, 20, len(pcm)
+        ) + pcm
+
+    monkeypatch.setattr(main_module, "stream_video", fake_stream)
+    catalog = client.get(
+        "/watch/api/v1/videos",
+        headers={"Authorization": "Bearer watch-token"},
+    ).json()
+    assert catalog["items"][0]["ws_url"].endswith("/ws")
+
+    with client.websocket_connect(
+        "/watch/api/v1/videos/%s/ws" % item["id"],
+        headers={"Authorization": "Bearer watch-token"},
+    ) as websocket:
+        frame = websocket.receive_bytes()
+        assert frame.startswith(WSV2_MAGIC)
+        assert frame[4] == TYPE_JPEG
+        assert frame.endswith(b"\xff\xd8fake-jpeg")
+        audio = websocket.receive_bytes()
+        assert audio.startswith(WSV2_MAGIC)
+        assert audio[4] == TYPE_PCM16
+        assert int.from_bytes(audio[16:20], "little") == 640
+
+
+def test_watch_video_websocket_rejects_bad_token(client):
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            "/watch/api/v1/videos/missing/ws",
+            headers={"Authorization": "Bearer wrong"},
+        ):
+            pass
+
+
 def test_chat_validates_messages(client):
     response = client.post("/api/chat", json={"messages": [], "stream": False})
     assert response.status_code in (400, 502)

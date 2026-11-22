@@ -129,7 +129,7 @@ static int cmd_script(int argc, char **argv)
     if (argv[1][0] == '/') snprintf(path, sizeof(path), "%s", argv[1]);
     else snprintf(path, sizeof(path), "%s/%s", WS_SCRIPT_DIR, argv[1]);
     if (!watch_script_execute(path)) {
-        printf("script busy or not found\n");
+        printf("script cannot start (busy / task / not found): %s\n", path);
         return 1;
     }
     return 0;

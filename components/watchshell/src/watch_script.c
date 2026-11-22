@@ -12,6 +12,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "ft_pmic.h"
 #include "watch_audio.h"
@@ -27,6 +28,8 @@
 #define MAX_LINES 512
 #define MAX_ARGS 16
 #define MAX_VARS 12
+
+static const char *TAG = "WATCH_SCRIPT";
 
 static volatile bool s_busy;
 static volatile bool s_stop;
@@ -459,8 +462,17 @@ static int exec_line(script_ctx_t *ctx, int argc, char *argv[])
     } else if (!strcmp(cmd, "wifi")) {
         cmd_wifi(argc, argv);
     } else if (!strcmp(cmd, "tone") && argc >= 3) {
-        watch_audio_init();
-        watch_audio_tone(atoi(argv[1]), atoi(argv[2]));
+        esp_err_t err = watch_audio_init();
+        if (err != ESP_OK) {
+            watch_term_printf(WS_COLOR_RED, "tone: audio init failed: %s\n",
+                              esp_err_to_name(err));
+        } else {
+            err = watch_audio_tone(atoi(argv[1]), atoi(argv[2]));
+            if (err != ESP_OK) {
+                watch_term_printf(WS_COLOR_RED, "tone write failed: %s\n",
+                                  esp_err_to_name(err));
+            }
+        }
     } else if (!strcmp(cmd, "volume") && argc >= 2) {
         int v = atoi(argv[1]);
         watch_audio_set_volume(v);
@@ -596,9 +608,23 @@ bool watch_script_execute(const char *path)
     s_stop = false;
     const char *base = strrchr(path, '/');
     snprintf(s_current, sizeof(s_current), "%s", base ? base + 1 : path);
-    /* script_ctx_t keeps 512 line pointers + labels on the stack; 8 KB is not enough. */
-    BaseType_t ok = xTaskCreatePinnedToCore(script_task, "wsh", 24576, copy, 4, &s_task, 1);
+    /* script_ctx_t keeps 512 line pointers + labels on the stack.  Keep the
+     * stack in PSRAM: video playback leaves little internal RAM, and the old
+     * fixed 24 KB internal allocation made tone.sh fail with "cannot exec"
+     * after a video.  Fall back to internal RAM only if PSRAM is unavailable. */
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+        script_task, "wsh", 24576, copy, 4, &s_task, 1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ok != pdPASS) {
+        ESP_LOGW(TAG, "wsh PSRAM stack failed, retry internal (psram=%u internal=%u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        ok = xTaskCreatePinnedToCore(script_task, "wsh", 24576, copy, 4, &s_task, 1);
+    }
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "wsh task create failed (internal=%u psram=%u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         free(copy);
         s_busy = false;
         s_current[0] = '\0';

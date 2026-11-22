@@ -16,6 +16,8 @@ typedef struct {
     char id[32];
     char title[48];
     char stream_url[192];
+    /* Preferred transport.  Empty means fall back to stream_url (HTTP). */
+    char ws_url[192];
     int duration_ms;
     int width;
     int height;
@@ -39,8 +41,8 @@ typedef struct {
 } ws_video_status_t;
 
 /* The video module keeps the legacy WSV2 TCP receiver for local senders and
- * also supports a catalog + HTTP pull mode.  The watch fetches the catalog,
- * then opens one item's stream_url and reads WSV2 frames from the HTTP body. */
+ * supports catalog-driven playback.  The watch prefers each item's ws_url
+ * (one WSV2 frame per binary message); stream_url is the HTTP fallback. */
 void watch_video_start(void);
 void watch_video_stop(void);
 void watch_video_get_status(ws_video_status_t *out);

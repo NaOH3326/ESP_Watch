@@ -88,8 +88,8 @@ static const char *html_page =
     "TOKEN <input id=video_token name=video_token size=42><br>"
     "<button type=submit>SAVE VIDEO</button></form></fieldset>"
     "<fieldset><legend>SCRIPT / MEDIA UPLOAD</legend>"
-    "<input id=file type=file accept='.wsh,.mp3,.wav,.aac,.jpg,.jpeg'><button id=up>UPLOAD</button>"
-    "<p class=muted>Scripts: .wsh &rarr; /storage/scripts &nbsp; "
+    "<input id=file type=file accept='.wsh,.sh,.mp3,.wav,.aac,.jpg,.jpeg'><button id=up>UPLOAD</button>"
+    "<p class=muted>Scripts: .wsh/.sh &rarr; /storage/scripts &nbsp; "
     "Music: .mp3/.wav/.aac &rarr; /storage/music &nbsp; Images: .jpg/.jpeg &rarr; /storage/video "
     "(browser resizes to 440x276 JPEG)</p>"
     "</fieldset><pre id=out class=muted>ready.</pre>"
@@ -268,8 +268,8 @@ static esp_err_t upload_post(httpd_req_t *req)
         dir = WS_MUSIC_DIR;
     } else if (has_suffix(clean, ".jpg") || has_suffix(clean, ".jpeg")) {
         dir = WS_VIDEO_DIR;
-    } else if (!has_suffix(clean, ".wsh")) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "only .wsh/.mp3/.wav/.aac/.jpg/.jpeg");
+    } else if (!has_suffix(clean, ".wsh") && !has_suffix(clean, ".sh")) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "only .wsh/.sh/.mp3/.wav/.aac/.jpg/.jpeg");
     }
     int len = req->content_len;
     if (len <= 0 || len > 6 * 1024 * 1024) {

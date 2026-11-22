@@ -37,7 +37,7 @@ src/                 对应实现 + app_*.c
 | `ai_play` | 1 | TTS Opus 解码 + I2S 输出 |
 | `wsh` | 1 | 脚本执行 |
 | `media` | 1 | MP3/WAV 解码 |
-| `video` | 0 | WSV2 TCP 推送接收 + HTTP 目录拉流，JPEG 解码后给 UI |
+| `video` | 0 | WSV2 TCP 推送 + 目录 WebSocket/HTTP 拉流，JPEG 解码后给 UI |
 | `boot_svc` | 0 | 快速启动时的存储 / 网络后台初始化 |
 | `httpd` | 任意 | 配置 / 上传网页 |
 
@@ -64,9 +64,9 @@ src/                 对应实现 + app_*.c
 - PICTURES/VIDEO 点击画面进入全屏：隐藏状态栏和 MEDIA 控件，按 cover 方式铺满 240×284；点屏幕或短按 PWR 退出。
 - 网页上传改为 4 KB 分块流式写盘，单文件上限 6 MB，并先写隐藏临时文件，完成后 `rename`，避免上传中断留下半张图。
 - 网页在浏览器侧用 Canvas 把图片缩放到最大 440×276 并重新编码 JPEG；固件保留降采样兜底，兼容旧的未压缩大图。
-- `VIDEO` 支持 **HTTP 目录 + 主动拉流**：进入页后 GET 配置的目录，点条目或 `PLAY` 打开 HTTP body 中的 WSV2 流；`SYNC` 刷新、`STOP` 断开。目录在 Portal 的 `VIDEO CATALOG` 配置。
+- `VIDEO` 支持 **目录 + WebSocket 主动拉流**：进入页后 GET 配置的目录，点条目或 `PLAY` 优先连接该条目的 `ws_url`（每条 binary message 是一个 WSV2 帧），旧目录没有 `ws_url` 时回退 HTTP body；`SYNC` 刷新、`STOP` 断开。目录在 Portal 的 `VIDEO CATALOG` 配置。
 - 兼容模式仍是 TCP `3333` 接收端，协议 `WSV2`：20 字节头 + baseline JPEG 或 PCM16。发送端负责缩放/编码；PCM 为 `s16le mono 16 kHz`，手表直接写 I2S。参考 `tools/ws_av_stream.py`、`tools/watch_media_server.py` 和 `Doc/VIDEO_STREAM.md`。
-- WSV2 的 PCM 不再在拉流任务里同步写 I2S：`watch_video.c` 使用 8 帧队列 + 独立 `video_aud` 任务播放，避免 20 ms 音频阻塞挤压 JPEG 解码，修复有音频视频约 9 FPS 和 VIDEO 页偶发卡死。
+- WSV2 的 PCM 不再在拉流任务里同步写 I2S：`watch_video.c` 使用 16 帧队列 + 独立 `video_aud` 任务播放，并对音频初始化加锁；WebSocket 模式下同一连接同时承载 JPEG 和 PCM。
 
 ## 电源与输入
 
@@ -85,7 +85,7 @@ src/                 对应实现 + app_*.c
 
 ## 脚本
 
-`.wsh` 文件位于 `/storage/scripts`。终端行保存每个字符的颜色，
+`.wsh` / `.sh` 文件位于 `/storage/scripts`。终端行保存每个字符的颜色，
 `watch_term_write_tagged()` 支持 `{red}...{/}`，`echo red "text"` 也可。
 脚本执行有 120 s / 200000 次迭代上限，PWR 返回或 STOP 按钮会置停止标志。
 

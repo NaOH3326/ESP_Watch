@@ -1,11 +1,12 @@
 # WSV2 网络音视频流协议
 
-MEDIA → `VIDEO` 支持两种模式：
+MEDIA → `VIDEO` 支持三种模式：
 
-1. **主动拉流（推荐）**：手表先 GET 视频目录，再 GET 选中条目的 HTTP 流。
-2. **兼容模式**：手表在 TCP `3333` 端口等待 `tools/ws_av_stream.py` 直接推流。
+1. **WebSocket 主动拉流（首选）**：手表先 GET 视频目录，再连接条目的 `ws_url`；每个 WSV2 帧作为一条 binary message 下发，音频 PCM 与 JPEG 交错在同一条连接中。
+2. **HTTP 主动拉流（兼容回退）**：目录没有 `ws_url` 时，手表连接 `stream_url`，从 HTTP chunked body 中解析相同的 WSV2 帧。
+3. **TCP 直推（兼容）**：手表在 TCP `3333` 端口等待 `tools/ws_av_stream.py` 直接推流。
 
-两种模式使用同一套 `WSV2` 帧格式；手表只做 JPEG 解码、RGB565 显示和 PCM 播放，不做 MP4/H.264 解码。
+三种模式使用同一套 `WSV2` 帧格式；手表只做 JPEG 解码、RGB565 显示和 PCM 播放，不做 MP4/H.264 解码。WebSocket 模式没有 HTTP chunk 解析和半双工断流问题，推荐服务器和固件都使用它。
 
 ## 主动拉流
 
@@ -32,18 +33,40 @@ Accept: application/json
       "duration_ms": 596000,
       "width": 220,
       "height": 138,
-      "stream_url": "/watch/api/v1/videos/a1b2c3d4/stream"
+      "stream_url": "/watch/api/v1/videos/a1b2c3d4/stream",
+      "ws_url": "/watch/api/v1/videos/a1b2c3d4/ws"
     }
   ]
 }
 ```
 
 - `title` 显示在 VIDEO 页，最多 47 字节。
-- `stream_url` 可以是绝对 URL，也可以是以 `/` 开头的同源路径；也可以相对目录 URL。
+- `stream_url` / `ws_url` 可以是绝对 URL，也可以是以 `/` 开头的同源路径；也可以相对目录 URL。
+- 手表优先使用 `ws_url`；缺失时会把 `stream_url` 末尾的 `/stream` 替换为 `/ws` 作为兼容推导，仍失败则回退 HTTP。
 - 手表一次最多保存 16 条。
 - 目录响应上限 48 KB。
 
-### 2. 主动播放
+### 2. WebSocket 播放（推荐）
+
+与视频目录相同的 token 放在 `Authorization` 头里：
+
+```http
+GET /watch/api/v1/videos/a1b2c3d4/ws HTTP/1.1
+Host: watch.example.com
+Upgrade: websocket
+Connection: Upgrade
+Authorization: Bearer <video_token>
+```
+
+服务器接受升级后，立即开始发送 binary message：
+
+- 每条 message = 一个完整的 WSV2 帧（20 字节头 + payload），不会把多帧拼进同一条 message。
+- JPEG 与 PCM 帧按源时间戳交错；PCM 是 16 kHz mono s16le，20 ms 一块。
+- 服务器必须等待 WebSocket 发送背压，不能无限缓冲；手表 STOP 时直接关闭连接。
+- 手表收到 PING 会回 PONG；服务器可以启用自身 ping/keepalive。
+- 当前实现位于 `server/app/main.py` 的 `/watch/api/v1/videos/{id}/ws`。
+
+### 3. HTTP 播放（兼容回退）
 
 用户点选条目后，手表连接 `stream_url`，请求头带同一个 token：
 
@@ -63,7 +86,7 @@ Transfer-Encoding: chunked
 Cache-Control: no-store
 ```
 
-响应体是连续的 `WSV2` 帧（不是 MP4 文件）。推荐使用 chunked，每块可以包含一帧或多帧。手表从 HTTP body 中按 20 字节帧头解析，读到关闭或 STOP 为止。
+响应体是连续的 `WSV2` 帧（不是 MP4 文件）。HTTP 回退模式使用 chunked，每块可以包含一帧或多帧。手表从 HTTP body 中按 20 字节帧头解析，读到关闭或 STOP 为止。新固件优先使用上面的 WebSocket 端点。
 
 服务器必须：
 
@@ -72,7 +95,7 @@ Cache-Control: no-store
 - 发生客户端断开时停止转码；
 - 不提供一个“只有 MP4 文件”的 URL；MP4 由服务器转成 JPEG + PCM。
 
-### 3. 参考服务器
+### 4. 参考服务器
 
 ```bash
 pip install -r tools/requirements.txt

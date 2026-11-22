@@ -116,7 +116,7 @@ bool watch_media_play(const char *filename)
     s_busy = true;
     s_stop = false;
     snprintf(s_current, sizeof(s_current), "%s", filename);
-    if (xTaskCreatePinnedToCore(media_task, "media", 8192, copy, 3, &s_task, 1) != pdPASS) {
+    if (xTaskCreatePinnedToCore(media_task, "media", 8192, copy, 6, &s_task, 1) != pdPASS) {
         free(copy);
         s_busy = false;
         s_current[0] = '\0';

@@ -12,7 +12,12 @@
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_transport.h"
+#include "esp_transport_ssl.h"
+#include "esp_transport_tcp.h"
+#include "esp_transport_ws.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -30,7 +35,7 @@ static const char *TAG = "WATCH_VIDEO";
 #define VIDEO_MAX_JPEG    (256 * 1024)
 #define VIDEO_MAX_PCM     (8 * 1024)
 #define VIDEO_MAX_DECODE  (1024 * 1024)
-#define VIDEO_AUDIO_QUEUE_LEN 8
+#define VIDEO_AUDIO_QUEUE_LEN 16
 #define VIDEO_MAGIC       "WSV2"
 #define VIDEO_MAGIC_LEN   4
 #define VIDEO_HEADER_LEN  20
@@ -62,6 +67,7 @@ static int s_frame_w;
 static int s_frame_h;
 static unsigned s_frames;
 static unsigned s_audio_chunks;
+static unsigned s_audio_drops;
 static int s_fps;
 static int s_fps_count;
 static int64_t s_fps_start;
@@ -81,6 +87,7 @@ static TaskHandle_t s_fetch_task;
 static TaskHandle_t s_stream_task;
 static char s_catalog_url[192];
 static char s_catalog_token[192];
+static char s_ws_headers[224];
 
 static uint16_t le16(const uint8_t *p)
 {
@@ -128,6 +135,46 @@ static bool url_has_http_scheme(const char *url)
     return url && (!strncasecmp(url, "http://", 7) || !strncasecmp(url, "https://", 8));
 }
 
+static bool url_has_ws_scheme(const char *url)
+{
+    return url && (!strncasecmp(url, "ws://", 5) || !strncasecmp(url, "wss://", 6));
+}
+
+/* Convert http(s)://... to ws(s)://...; leave ws(s) URLs untouched. */
+static bool url_http_to_ws(const char *in, char *out, size_t out_len)
+{
+    if (!in || !out || out_len < 8) return false;
+    const char *prefix = NULL;
+    if (!strncasecmp(in, "https://", 8)) prefix = "wss://";
+    else if (!strncasecmp(in, "http://", 7)) prefix = "ws://";
+    else if (!strncasecmp(in, "wss://", 6) || !strncasecmp(in, "ws://", 5)) {
+        snprintf(out, out_len, "%s", in);
+        return true;
+    } else {
+        return false;
+    }
+    const char *rest = strstr(in, "://");
+    if (!rest) return false;
+    snprintf(out, out_len, "%s%s", prefix, rest + 3);
+    return true;
+}
+
+/* Old catalogs only expose .../stream.  Derive .../ws so a mixed-version
+ * deployment still prefers WebSocket. */
+static bool derive_ws_url(const char *stream, char *out, size_t out_len)
+{
+    char tmp[192];
+    if (!url_http_to_ws(stream, tmp, sizeof(tmp))) return false;
+    size_t n = strlen(tmp);
+    if (n >= 7 && !strcmp(tmp + n - 7, "/stream")) {
+        tmp[n - 7] = '\0';
+        snprintf(out, out_len, "%s/ws", tmp);
+        return true;
+    }
+    snprintf(out, out_len, "%s", tmp);
+    return true;
+}
+
 /* Copy scheme://host[:port] from an absolute URL. */
 static bool url_origin(const char *url, char *out, size_t out_len)
 {
@@ -146,7 +193,7 @@ static bool url_origin(const char *url, char *out, size_t out_len)
 static bool resolve_catalog_url(const char *base, const char *ref, char *out, size_t out_len)
 {
     if (!ref || !ref[0] || !out || out_len < 8) return false;
-    if (url_has_http_scheme(ref)) {
+    if (url_has_http_scheme(ref) || url_has_ws_scheme(ref)) {
         snprintf(out, out_len, "%s", ref);
         return true;
     }
@@ -239,6 +286,114 @@ static bool http_read_exact(esp_http_client_handle_t client, uint8_t *buf, size_
     return done == len;
 }
 
+/* Parse ws://host[:port]/path into the pieces esp_transport expects. */
+static bool parse_ws_url(const char *url, char *host, size_t host_len,
+                         int *port, bool *secure, char *path, size_t path_len)
+{
+    if (!url || !host || !port || !secure || !path) return false;
+    const char *p = NULL;
+    if (!strncasecmp(url, "wss://", 6)) {
+        *secure = true;
+        *port = 443;
+        p = url + 6;
+    } else if (!strncasecmp(url, "ws://", 5)) {
+        *secure = false;
+        *port = 80;
+        p = url + 5;
+    } else {
+        return false;
+    }
+    const char *slash = strchr(p, '/');
+    size_t authority_len = slash ? (size_t)(slash - p) : strlen(p);
+    const char *colon = memchr(p, ':', authority_len);
+    size_t name_len = colon ? (size_t)(colon - p) : authority_len;
+    if (!name_len || name_len >= host_len) return false;
+    memcpy(host, p, name_len);
+    host[name_len] = '\0';
+    if (colon) {
+        int parsed = atoi(colon + 1);
+        if (parsed <= 0 || parsed > 65535) return false;
+        *port = parsed;
+    }
+    snprintf(path, path_len, "%s", slash ? slash : "/");
+    return true;
+}
+
+static esp_transport_handle_t ws_open(const char *url, char *err, size_t err_len)
+{
+    char host[96];
+    char path[224];
+    int port = 0;
+    bool secure = false;
+    if (!parse_ws_url(url, host, sizeof(host), &port, &secure, path, sizeof(path))) {
+        snprintf(err, err_len, "bad ws url");
+        return NULL;
+    }
+
+    esp_transport_handle_t parent = secure ? esp_transport_ssl_init() : esp_transport_tcp_init();
+    if (!parent) {
+        snprintf(err, err_len, "ws transport");
+        return NULL;
+    }
+    if (secure) {
+        esp_transport_ssl_crt_bundle_attach(parent, esp_crt_bundle_attach);
+    }
+    esp_transport_handle_t ws = esp_transport_ws_init(parent);
+    if (!ws) {
+        esp_transport_destroy(parent);
+        snprintf(err, err_len, "ws init");
+        return NULL;
+    }
+
+    s_ws_headers[0] = '\0';
+    if (s_catalog_token[0]) {
+        snprintf(s_ws_headers, sizeof(s_ws_headers), "Authorization: Bearer %s\r\n", s_catalog_token);
+    }
+    esp_transport_ws_config_t cfg = {
+        .ws_path = path,
+        .headers = s_ws_headers,
+        .propagate_control_frames = true,
+    };
+    esp_transport_ws_set_config(ws, &cfg);
+    if (esp_transport_connect(ws, host, port, 10000) < 0) {
+        esp_transport_destroy(ws);
+        snprintf(err, err_len, "ws connect");
+        return NULL;
+    }
+    return ws;
+}
+
+static void ws_close(esp_transport_handle_t ws)
+{
+    if (!ws) return;
+    esp_transport_close(ws);
+    esp_transport_destroy(ws);
+}
+
+/* Read one complete WebSocket message.  WSV2 frames are sent as one binary
+ * message; `buf` is the PSRAM receive buffer allocated by stream_ws_task(). */
+static int ws_read_message(esp_transport_handle_t ws, uint8_t *buf, size_t cap,
+                           ws_transport_opcodes_t *op_out)
+{
+    if (!ws || !buf || cap == 0) return -1;
+    int got = esp_transport_read(ws, (char *)buf, (int)cap, 1000);
+    if (got <= 0) {
+        if (op_out) *op_out = esp_transport_ws_get_read_opcode(ws);
+        return got;
+    }
+    ws_transport_opcodes_t op = esp_transport_ws_get_read_opcode(ws);
+    int payload = esp_transport_ws_get_read_payload_len(ws);
+    if (payload < 0 || (size_t)payload > cap) return -1;
+    int want = payload > got ? payload : got;
+    while (got < want) {
+        int n = esp_transport_read(ws, (char *)buf + got, want - got, 1000);
+        if (n <= 0) return n;
+        got += n;
+    }
+    if (op_out) *op_out = op;
+    return want;
+}
+
 static bool recv_all(int fd, uint8_t *buf, size_t len)
 {
     size_t done = 0;
@@ -303,9 +458,19 @@ static void video_audio_task(void *arg)
             continue;
         }
         if (s_enabled && pkt.data && pkt.len >= 2 && !(pkt.len & 1)) {
-            if (watch_audio_write((const int16_t *)pkt.data, (int)(pkt.len / 2),
-                                  WS_AUDIO_RATE) != ESP_OK) {
-                ESP_LOGW(TAG, "audio write failed");
+            static bool logged_first;
+            if (!logged_first) {
+                logged_first = true;
+                ESP_LOGI(TAG, "video audio first chunk: %u bytes", (unsigned)pkt.len);
+            }
+            esp_err_t err = watch_audio_write((const int16_t *)pkt.data,
+                                              (int)(pkt.len / 2), WS_AUDIO_RATE);
+            if (err != ESP_OK) {
+                static unsigned logged;
+                if (logged++ < 4) {
+                    ESP_LOGW(TAG, "audio write failed: %s (%u bytes)",
+                             esp_err_to_name(err), (unsigned)pkt.len);
+                }
             }
         }
         free(pkt.data);
@@ -332,21 +497,30 @@ static bool process_frame(uint8_t type, uint16_t sw, uint16_t sh,
     if (type == VIDEO_TYPE_PCM16) {
         if ((len & 1) || len > VIDEO_MAX_PCM) return false;
         if (s_audio_q) {
-            uint8_t *copy = malloc(len);
+            uint8_t *copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!copy) copy = heap_caps_malloc(len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            if (!copy) copy = malloc(len);
             if (copy) {
                 memcpy(copy, data, len);
                 video_audio_pkt_t pkt = { .data = copy, .len = (uint16_t)len };
-                if (xQueueSend(s_audio_q, &pkt, 0) != pdTRUE) {
+                /* A 20 ms PCM chunk at 16 kHz is 640 bytes.  Waiting a short
+                 * time applies natural backpressure instead of silently
+                 * dropping audio whenever the I2S writer is one chunk behind. */
+                if (xQueueSend(s_audio_q, &pkt, pdMS_TO_TICKS(20)) != pdTRUE) {
                     free(copy);
+                    xSemaphoreTake(s_lock, portMAX_DELAY);
+                    s_audio_drops++;
+                    xSemaphoreGive(s_lock);
+                } else {
+                    xSemaphoreTake(s_lock, portMAX_DELAY);
+                    s_audio_chunks++;
+                    xSemaphoreGive(s_lock);
                 }
             }
         } else if (watch_audio_write((const int16_t *)data, (int)(len / 2),
                                      WS_AUDIO_RATE) != ESP_OK) {
             ESP_LOGW(TAG, "audio write failed");
         }
-        xSemaphoreTake(s_lock, portMAX_DELAY);
-        s_audio_chunks++;
-        xSemaphoreGive(s_lock);
         return true;
     }
     ESP_LOGW(TAG, "unknown frame type %u", type);
@@ -431,6 +605,8 @@ static bool parse_catalog(const char *body)
         cJSON *jurl = cJSON_GetObjectItemCaseSensitive(it, "stream_url");
         if (!cJSON_IsString(jurl)) jurl = cJSON_GetObjectItemCaseSensitive(it, "url");
         if (!cJSON_IsString(jurl) || !jurl->valuestring[0]) continue;
+        cJSON *jws = cJSON_GetObjectItemCaseSensitive(it, "ws_url");
+        if (!cJSON_IsString(jws)) jws = cJSON_GetObjectItemCaseSensitive(it, "websocket_url");
 
         ws_video_item_t *dst = &s_catalog[count];
         memset(dst, 0, sizeof(*dst));
@@ -442,6 +618,15 @@ static bool parse_catalog(const char *body)
 
         if (resolve_catalog_url(s_catalog_url, jurl->valuestring,
                                 dst->stream_url, sizeof(dst->stream_url))) {
+            if (cJSON_IsString(jws) && jws->valuestring[0]) {
+                char resolved[192];
+                if (resolve_catalog_url(s_catalog_url, jws->valuestring,
+                                        resolved, sizeof(resolved))) {
+                    url_http_to_ws(resolved, dst->ws_url, sizeof(dst->ws_url));
+                }
+            } else {
+                derive_ws_url(dst->stream_url, dst->ws_url, sizeof(dst->ws_url));
+            }
             cJSON *jlen = cJSON_GetObjectItemCaseSensitive(it, "duration_ms");
             cJSON *jw = cJSON_GetObjectItemCaseSensitive(it, "width");
             cJSON *jh = cJSON_GetObjectItemCaseSensitive(it, "height");
@@ -527,45 +712,8 @@ static void fetch_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static void stream_task(void *arg)
+static bool stream_http_loop(esp_http_client_handle_t client, int gen)
 {
-    int index = (int)(intptr_t)arg;
-    int gen = s_play_gen;
-    ws_video_item_t item;
-    char err[64] = {0};
-
-    memset(&item, 0, sizeof(item));
-    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (index >= 0 && index < s_catalog_count) item = s_catalog[index];
-    if (s_lock) xSemaphoreGive(s_lock);
-    if (!item.stream_url[0]) {
-        set_state(WS_VIDEO_ERROR, "bad selection");
-        s_stream_task = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    snprintf(s_current_title, sizeof(s_current_title), "%s", item.title);
-    set_state(WS_VIDEO_CONNECTING, "connecting");
-    esp_http_client_handle_t client = http_open(item.stream_url, err, sizeof(err));
-    if (!client) {
-        if (s_enabled && s_play_gen == gen) set_state(WS_VIDEO_ERROR, err);
-        s_stream_task = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-    if (!s_enabled || s_play_gen != gen) {
-        esp_http_client_cleanup(client);
-        s_stream_task = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    s_streaming = true;
-    s_connected = true;
-    set_state(WS_VIDEO_PLAYING, item.title);
-    ESP_LOGI(TAG, "streaming %s", item.stream_url);
-
     uint8_t hdr[VIDEO_HEADER_LEN];
     while (s_enabled && s_play_gen == gen &&
            http_read_exact(client, hdr, sizeof(hdr), gen)) {
@@ -593,14 +741,164 @@ static void stream_task(void *arg)
             break;
         }
     }
+    return s_enabled && s_play_gen == gen;
+}
 
-    esp_http_client_cleanup(client);
+/* WebSocket stream: every binary message is exactly one WSV2 header + payload.
+ * This removes the HTTP chunk parser and the half-duplex connection teardown. */
+static bool stream_ws_loop(const char *url, int gen)
+{
+    char err[64] = {0};
+    esp_transport_handle_t ws = ws_open(url, err, sizeof(err));
+    if (!ws) {
+        if (s_enabled && s_play_gen == gen) set_state(WS_VIDEO_ERROR, err);
+        return false;
+    }
+
+    size_t cap = VIDEO_MAX_JPEG + VIDEO_HEADER_LEN;
+    uint8_t *buf = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) buf = malloc(cap);
+    if (!buf) {
+        ws_close(ws);
+        if (s_enabled && s_play_gen == gen) set_state(WS_VIDEO_ERROR, "no ws buffer");
+        return false;
+    }
+
+    s_streaming = true;
+    s_connected = true;
+    set_state(WS_VIDEO_PLAYING, s_current_title);
+    ESP_LOGI(TAG, "streaming ws %s", url);
+
+    int idle = 0;
+    bool got_any = false;
+
+    while (s_enabled && s_play_gen == gen) {
+        ws_transport_opcodes_t op = WS_TRANSPORT_OPCODES_NONE;
+        int len = ws_read_message(ws, buf, cap, &op);
+        if (len < 0) {
+            ESP_LOGW(TAG, "ws read failed: %d", len);
+            break;
+        }
+        if (op == WS_TRANSPORT_OPCODES_PING) {
+            esp_transport_ws_send_raw(ws, WS_TRANSPORT_OPCODES_PONG |
+                                          WS_TRANSPORT_OPCODES_FIN,
+                                      (const char *)buf, len > 0 ? len : 0, 1000);
+            continue;
+        }
+        if (op == WS_TRANSPORT_OPCODES_CLOSE) break;
+        if (op == WS_TRANSPORT_OPCODES_TEXT) {
+            char text[40];
+            int n = len < (int)sizeof(text) - 1 ? len : (int)sizeof(text) - 1;
+            memcpy(text, buf, (size_t)n);
+            text[n] = '\0';
+            if (strstr(text, "eof") || strstr(text, "stop")) break;
+            continue;
+        }
+        if (len == 0) {
+            /* WS read timeout (1 s) or an empty control frame.  Do not spin
+             * forever if the server closed without delivering a close frame. */
+            if (++idle > 5) {
+                ESP_LOGW(TAG, "ws idle timeout");
+                break;
+            }
+            continue;
+        }
+        idle = 0;
+        if (op != WS_TRANSPORT_OPCODES_BINARY) continue;
+        if (len < VIDEO_HEADER_LEN ||
+            memcmp(buf, VIDEO_MAGIC, VIDEO_MAGIC_LEN) != 0) {
+            ESP_LOGW(TAG, "bad ws frame (%d bytes)", len);
+            break;
+        }
+        static bool logged_frame;
+        if (!logged_frame) {
+            logged_frame = true;
+            ESP_LOGI(TAG, "ws first frame: type=%u len=%d", buf[4], len);
+        }
+        uint8_t type = buf[4];
+        uint16_t sw = le16(buf + 6);
+        uint16_t sh = le16(buf + 8);
+        uint32_t payload = le32(buf + 16);
+        if (payload == 0 || (size_t)payload + VIDEO_HEADER_LEN > (size_t)len) {
+            ESP_LOGW(TAG, "bad ws payload %u/%d", (unsigned)payload, len);
+            break;
+        }
+        if (!process_frame(type, sw, sh, buf + VIDEO_HEADER_LEN, payload)) {
+            break;
+        }
+        got_any = true;
+    }
+
+    free(buf);
+    ws_close(ws);
+    return s_enabled && s_play_gen == gen && got_any;
+}
+
+static void stream_task(void *arg)
+{
+    int index = (int)(intptr_t)arg;
+    int gen = s_play_gen;
+    ws_video_item_t item;
+    char err[64] = {0};
+
+    memset(&item, 0, sizeof(item));
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (index >= 0 && index < s_catalog_count) item = s_catalog[index];
+    if (s_lock) xSemaphoreGive(s_lock);
+    if (!item.stream_url[0] && !item.ws_url[0]) {
+        set_state(WS_VIDEO_ERROR, "bad selection");
+        s_stream_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    snprintf(s_current_title, sizeof(s_current_title), "%s", item.title);
+    set_state(WS_VIDEO_CONNECTING, "connecting");
+
+    bool ok = false;
+    if (item.ws_url[0]) {
+        ok = stream_ws_loop(item.ws_url, gen);
+        /* A mixed-version deployment (new catalog on an old server) or a
+         * proxy without WS upgrade support should still play via HTTP. */
+        if (!ok && s_enabled && s_play_gen == gen && item.stream_url[0]) {
+            ESP_LOGW(TAG, "ws failed, falling back to HTTP");
+            esp_http_client_handle_t client = http_open(item.stream_url, err, sizeof(err));
+            if (!client) {
+                if (s_enabled && s_play_gen == gen) set_state(WS_VIDEO_ERROR, err);
+            } else {
+                s_streaming = true;
+                s_connected = true;
+                set_state(WS_VIDEO_PLAYING, item.title);
+                ESP_LOGI(TAG, "streaming http fallback %s", item.stream_url);
+                ok = stream_http_loop(client, gen);
+                esp_http_client_cleanup(client);
+            }
+        }
+    } else {
+        esp_http_client_handle_t client = http_open(item.stream_url, err, sizeof(err));
+        if (!client) {
+            if (s_enabled && s_play_gen == gen) set_state(WS_VIDEO_ERROR, err);
+        } else {
+            s_streaming = true;
+            s_connected = true;
+            set_state(WS_VIDEO_PLAYING, item.title);
+            ESP_LOGI(TAG, "streaming http %s", item.stream_url);
+            ok = stream_http_loop(client, gen);
+            esp_http_client_cleanup(client);
+        }
+    }
+
     if (s_play_gen == gen) {
         s_streaming = false;
         s_connected = false;
-        if (s_enabled) set_state(WS_VIDEO_READY, "stream ended");
+        if (s_enabled && s_state != WS_VIDEO_ERROR) {
+            set_state(WS_VIDEO_READY, ok ? "stream ended" : "stream stopped");
+        }
     }
-    s_stream_task = NULL;
+    if (s_audio_drops) {
+        ESP_LOGW(TAG, "video audio dropped %u chunk(s)", s_audio_drops);
+    }
+    if (s_play_gen == gen) s_stream_task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -612,8 +910,8 @@ static void video_task(void *arg)
         if (!s_jpeg) s_jpeg = malloc(VIDEO_MAX_JPEG);
     }
     if (!s_pcm) {
-        s_pcm = heap_caps_malloc(VIDEO_MAX_PCM, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (!s_pcm) s_pcm = heap_caps_malloc(VIDEO_MAX_PCM, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_pcm = heap_caps_malloc(VIDEO_MAX_PCM, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_pcm) s_pcm = heap_caps_malloc(VIDEO_MAX_PCM, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
     if (!s_jpeg || !s_pcm) {
         ESP_LOGE(TAG, "no AV receive buffer");
@@ -695,11 +993,18 @@ void watch_video_start(void)
         s_audio_q = xQueueCreate(VIDEO_AUDIO_QUEUE_LEN, sizeof(video_audio_pkt_t));
     }
     if (s_audio_q && !s_audio_task) {
-        if (xTaskCreatePinnedToCore(video_audio_task, "video_aud", 8192, NULL,
-                                    4, &s_audio_task, 1) != pdPASS) {
+        BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+            video_audio_task, "video_aud", 8192, NULL, 6, &s_audio_task, 1,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (ok != pdPASS) {
+            ok = xTaskCreatePinnedToCore(video_audio_task, "video_aud", 8192,
+                                         NULL, 6, &s_audio_task, 1);
+        }
+        if (ok != pdPASS) {
             s_audio_task = NULL;
             vQueueDelete(s_audio_q);
             s_audio_q = NULL;
+            ESP_LOGW(TAG, "failed to create video audio task");
         }
     }
 
@@ -708,8 +1013,8 @@ void watch_video_start(void)
         if (!s_jpeg) s_jpeg = malloc(VIDEO_MAX_JPEG);
     }
     if (!s_pcm) {
-        s_pcm = heap_caps_malloc(VIDEO_MAX_PCM, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (!s_pcm) s_pcm = heap_caps_malloc(VIDEO_MAX_PCM, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_pcm = heap_caps_malloc(VIDEO_MAX_PCM, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_pcm) s_pcm = heap_caps_malloc(VIDEO_MAX_PCM, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
     if (!s_jpeg || !s_pcm) {
         ESP_LOGE(TAG, "no AV receive buffer");
@@ -721,7 +1026,14 @@ void watch_video_start(void)
     s_enabled = true;
     s_connected = false;
     if (!s_task) {
-        if (xTaskCreatePinnedToCore(video_task, "video", 12288, NULL, 3, &s_task, 0) != pdPASS) {
+        BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+            video_task, "video", 12288, NULL, 3, &s_task, 0,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (ok != pdPASS) {
+            ok = xTaskCreatePinnedToCore(video_task, "video", 12288, NULL,
+                                         3, &s_task, 0);
+        }
+        if (ok != pdPASS) {
             s_task = NULL;
             s_enabled = false;
             set_state(WS_VIDEO_ERROR, "no video task");
@@ -760,6 +1072,7 @@ void watch_video_stop(void)
         s_fps_count = 0;
         s_fps_start = 0;
         s_audio_chunks = 0;
+        s_audio_drops = 0;
         s_state = WS_VIDEO_OFFLINE;
         s_detail[0] = '\0';
         s_current_title[0] = '\0';
@@ -804,8 +1117,14 @@ static void catalog_fetch_if_enabled(void)
     s_fetch_gen++;
     int gen = s_fetch_gen;
     s_fetching = true;
-    if (xTaskCreatePinnedToCore(fetch_task, "video_cat", 12288,
-                                (void *)(intptr_t)gen, 3, &s_fetch_task, 0) != pdPASS) {
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+        fetch_task, "video_cat", 12288, (void *)(intptr_t)gen, 3, &s_fetch_task, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ok != pdPASS) {
+        ok = xTaskCreatePinnedToCore(fetch_task, "video_cat", 12288,
+                                     (void *)(intptr_t)gen, 3, &s_fetch_task, 0);
+    }
+    if (ok != pdPASS) {
         s_fetching = false;
         s_fetch_task = NULL;
         set_state(WS_VIDEO_ERROR, "no catalog task");
@@ -849,6 +1168,18 @@ void watch_video_stop_playback(void)
     s_play_gen++;
     s_streaming = false;
     s_connected = false;
+    if (s_audio_q) {
+        video_audio_pkt_t pkt;
+        while (xQueueReceive(s_audio_q, &pkt, 0) == pdTRUE) {
+            free(pkt.data);
+        }
+    }
+    if (s_lock) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_audio_chunks = 0;
+        s_audio_drops = 0;
+        xSemaphoreGive(s_lock);
+    }
     int c = s_client;
     if (c >= 0) {
         shutdown(c, SHUT_RDWR);
@@ -865,9 +1196,16 @@ void watch_video_play(int index)
     }
     watch_video_stop_playback();
     s_play_gen++;
+    s_audio_drops = 0;
     set_state(WS_VIDEO_CONNECTING, "connecting");
-    if (xTaskCreatePinnedToCore(stream_task, "video_http", 12288,
-                                (void *)(intptr_t)index, 3, &s_stream_task, 0) != pdPASS) {
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+        stream_task, "video_ws", 12288, (void *)(intptr_t)index, 3, &s_stream_task, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ok != pdPASS) {
+        ok = xTaskCreatePinnedToCore(stream_task, "video_ws", 12288,
+                                     (void *)(intptr_t)index, 3, &s_stream_task, 0);
+    }
+    if (ok != pdPASS) {
         s_stream_task = NULL;
         set_state(WS_VIDEO_ERROR, "no stream task");
     }
