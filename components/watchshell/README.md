@@ -36,7 +36,7 @@ src/                 对应实现 + app_*.c
 | `ai_cap` | 1 | PTT 麦克风 Opus 编码 |
 | `ai_play` | 1 | TTS Opus 解码 + I2S 输出 |
 | `wsh` | 1 | 脚本执行 |
-| `media` | 1 | MP3/WAV 解码 |
+| `media` | 1 | MP3/WAV/AAC 解码，本地或云端 HTTP 流式音乐 |
 | `video` | 0 | WSV2 TCP 推送 + 目录 WebSocket/HTTP 拉流，JPEG 解码后给 UI |
 | `boot_svc` | 0 | 快速启动时的存储 / 网络后台初始化 |
 | `httpd` | 任意 | 配置 / 上传网页 |

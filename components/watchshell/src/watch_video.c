@@ -1117,14 +1117,11 @@ static void catalog_fetch_if_enabled(void)
     s_fetch_gen++;
     int gen = s_fetch_gen;
     s_fetching = true;
-    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
-        fetch_task, "video_cat", 12288, (void *)(intptr_t)gen, 3, &s_fetch_task, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ok != pdPASS) {
-        ok = xTaskCreatePinnedToCore(fetch_task, "video_cat", 12288,
-                                     (void *)(intptr_t)gen, 3, &s_fetch_task, 0);
-    }
-    if (ok != pdPASS) {
+    /* This task calls NVS (watch_config_get_video).  Its stack MUST be in
+     * internal RAM: ESP-IDF disables the flash cache while NVS reads, and a
+     * PSRAM stack would assert in esp_task_stack_is_sane_cache_disabled(). */
+    if (xTaskCreatePinnedToCore(fetch_task, "video_cat", 12288,
+                                (void *)(intptr_t)gen, 3, &s_fetch_task, 0) != pdPASS) {
         s_fetching = false;
         s_fetch_task = NULL;
         set_state(WS_VIDEO_ERROR, "no catalog task");
@@ -1198,14 +1195,9 @@ void watch_video_play(int index)
     s_play_gen++;
     s_audio_drops = 0;
     set_state(WS_VIDEO_CONNECTING, "connecting");
-    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
-        stream_task, "video_ws", 12288, (void *)(intptr_t)index, 3, &s_stream_task, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ok != pdPASS) {
-        ok = xTaskCreatePinnedToCore(stream_task, "video_ws", 12288,
-                                     (void *)(intptr_t)index, 3, &s_stream_task, 0);
-    }
-    if (ok != pdPASS) {
+    /* Network/TLS can touch flash-backed data; keep this stack internal. */
+    if (xTaskCreatePinnedToCore(stream_task, "video_ws", 12288,
+                                (void *)(intptr_t)index, 3, &s_stream_task, 0) != pdPASS) {
         s_stream_task = NULL;
         set_state(WS_VIDEO_ERROR, "no stream task");
     }

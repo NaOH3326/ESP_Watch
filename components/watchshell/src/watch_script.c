@@ -519,28 +519,33 @@ static void add_label(script_ctx_t *ctx, const char *line, int index)
 
 static void run_script(char *buf, size_t len)
 {
-    script_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.echo_color = WS_COLOR_GREEN;
+    script_ctx_t *ctx = heap_caps_calloc(1, sizeof(*ctx),
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ctx) ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        watch_term_printf(WS_COLOR_RED, "script: no memory for context\n");
+        return;
+    }
+    ctx->echo_color = WS_COLOR_GREEN;
 
     char *p = buf;
     char *end = buf + len;
-    while (p < end && ctx.count < MAX_LINES) {
+    while (p < end && ctx->count < MAX_LINES) {
         char *nl = memchr(p, '\n', (size_t)(end - p));
         if (nl) *nl = '\0';
         char *line = p;
         size_t n = strlen(line);
         if (n && line[n - 1] == '\r') line[n - 1] = '\0';
-        ctx.lines[ctx.count++] = line;
+        ctx->lines[ctx->count++] = line;
         if (!nl) break;
         p = nl + 1;
     }
-    for (int i = 0; i < ctx.count; i++) add_label(&ctx, ctx.lines[i], i);
+    for (int i = 0; i < ctx->count; i++) add_label(ctx, ctx->lines[i], i);
 
     int pc = 0;
     int guard = 0;
     int64_t start = esp_timer_get_time();
-    while (pc < ctx.count && !s_stop) {
+    while (pc < ctx->count && !s_stop) {
         if (++guard > 200000) {
             watch_term_printf(WS_COLOR_RED, "script guard: too many iterations\n");
             break;
@@ -549,7 +554,7 @@ static void run_script(char *buf, size_t len)
             watch_term_printf(WS_COLOR_RED, "script timeout (120s)\n");
             break;
         }
-        char *copy = strdup(ctx.lines[pc]);
+        char *copy = strdup(ctx->lines[pc]);
         if (!copy) break;
         char *argv[MAX_ARGS];
         int argc = tokenize(copy, argv, MAX_ARGS);
@@ -558,7 +563,7 @@ static void run_script(char *buf, size_t len)
             pc++;
             continue;
         }
-        int target = exec_line(&ctx, argc, argv);
+        int target = exec_line(ctx, argc, argv);
         free(copy);
         if (target >= 0) {
             pc = target;
@@ -570,7 +575,8 @@ static void run_script(char *buf, size_t len)
     if (s_stop) {
         watch_term_printf(WS_COLOR_AMBER, "^C stopped\n");
     }
-    for (int i = 0; i < ctx.label_count; i++) free(ctx.labels[i]);
+    for (int i = 0; i < ctx->label_count; i++) free(ctx->labels[i]);
+    free(ctx);
 }
 
 static void script_task(void *arg)
@@ -608,19 +614,11 @@ bool watch_script_execute(const char *path)
     s_stop = false;
     const char *base = strrchr(path, '/');
     snprintf(s_current, sizeof(s_current), "%s", base ? base + 1 : path);
-    /* script_ctx_t keeps 512 line pointers + labels on the stack.  Keep the
-     * stack in PSRAM: video playback leaves little internal RAM, and the old
-     * fixed 24 KB internal allocation made tone.sh fail with "cannot exec"
-     * after a video.  Fall back to internal RAM only if PSRAM is unavailable. */
-    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
-        script_task, "wsh", 24576, copy, 4, &s_task, 1,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ok != pdPASS) {
-        ESP_LOGW(TAG, "wsh PSRAM stack failed, retry internal (psram=%u internal=%u)",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-        ok = xTaskCreatePinnedToCore(script_task, "wsh", 24576, copy, 4, &s_task, 1);
-    }
+    /* This task reads FATFS/flash, so its stack must stay in internal RAM.
+     * ESP-IDF disables the flash cache during the read and asserts if the
+     * current task stack lives in PSRAM.  The script context is heap-allocated
+     * in run_script(), so 16 KB is enough after video playback. */
+    BaseType_t ok = xTaskCreatePinnedToCore(script_task, "wsh", 16384, copy, 4, &s_task, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "wsh task create failed (internal=%u psram=%u)",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),

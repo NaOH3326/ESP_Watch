@@ -82,9 +82,10 @@ idf.py build flash monitor
 1. 设置 Wi-Fi SSID / 密码（保存后自动重启，切到 STA 模式）。
 2. 设置 AI WebSocket URL / token（自建 `xiaozhi-esp32-server` 时填写）。
 3. 设置视频目录 URL / token（可选；手表主动拉流时使用，见 `Doc/VIDEO_STREAM.md`）。
-4. 上传 `.wsh` / `.sh` 脚本到 `/storage/scripts/`。
-5. 上传 `.mp3` / `.wav` / `.aac` 到 `/storage/music/`。
-6. 上传 `.jpg` / `.jpeg`（PNG/WebP 在浏览器里也会转成 JPG）到 `/storage/video/`（Media → PICTURES 显示）；浏览器会先用 Canvas 缩放到最大 440×276 并重新编码为 JPEG，固件只做兼容解码。单个文件最大 6 MB，固件按 4 KB 流式写盘，不会整包占用 RAM。
+4. 设置音乐目录 URL / token（可选；从服务器流式播放 MP3/WAV/AAC/M4A）。
+5. 上传 `.wsh` / `.sh` 脚本到 `/storage/scripts/`。
+6. 上传 `.mp3` / `.wav` / `.aac` 到 `/storage/music/`。
+7. 上传 `.jpg` / `.jpeg`（PNG/WebP 在浏览器里也会转成 JPG）到 `/storage/video/`（Media → PICTURES 显示）；浏览器会先用 Canvas 缩放到最大 440×276 并重新编码为 JPEG，固件只做兼容解码。单个文件最大 6 MB，固件按 4 KB 流式写盘，不会整包占用 RAM。
 
 也可以直接用 USB 串口 REPL 的 `wifi` / `ai` 命令。
 
@@ -134,7 +135,7 @@ App：
 | AI | 首屏显示连接状态与 `OPEN CHAT`；进入独立聊天页后，按住底部条说话，显示 ASR 回显、DeepSeek 流式文字和 TTS 回复；支持消息滚动与中文 14px 点阵 |
 | SHELL | 脚本列表、UP/DOWN/EXEC/STOP、输出滚动、彩色 echo |
 | SENSORS | MOTION / COMPASS / ENV / SYSTEM 四页；罗盘 8 秒校准 |
-| MEDIA | MUSIC（MP3/WAV）、PICTURES（JPG/JPEG，支持浏览、全屏和两次确认删除）、VIDEO（WebSocket/HTTP 视频目录 + 主动拉流；兼容 WSV2 TCP 推送；支持全屏） |
+| MEDIA | MUSIC（本地 `/storage/music` 或服务器 `MUSIC CATALOG` 流式播放）、PICTURES（JPG/JPEG，支持浏览、全屏和两次确认删除）、VIDEO（WebSocket/HTTP 视频目录 + 主动拉流；兼容 WSV2 TCP 推送；支持全屏） |
 | GAMES | 贪吃蛇、2048、MATRIX 全屏长字符串字符雨、HEX 二维 IMU 六边形、FLASK 密闭容器水面，支持触摸滑动/按键 |
 | SETTINGS | Wi-Fi、Portal、主题、空闲关机、亮度、音量、关机、重启；按钮加大，支持左右键选择 + PWR 执行 |
 
@@ -197,6 +198,20 @@ waiting for download
   ```
 - 详细协议见 [`Doc/VIDEO_STREAM.md`](Doc/VIDEO_STREAM.md)。
 - 离开 VIDEO 页会停止接收并释放视频帧。
+
+### 3.4 云端音乐（MUSIC）
+
+- 在服务器 Dashboard 上传 `.mp3` / `.wav` / `.aac` / `.m4a`，文件会登记为 `audio`。
+- 进入 `MEDIA → MUSIC` 时，手表优先请求 Portal 中配置的 `MUSIC CATALOG`，例如：
+
+  ```text
+  http://192.168.1.10:8080/watch/api/v1/music
+  ```
+
+- 点条目后手表通过 HTTP 流式读取服务器原始音频字节，不做整首下载；MP3/WAV/AAC/M4A 由手表本地解码后直接写 I2S。
+- 服务端只返回手表支持的格式；`.ogg` / `.flac` 等不会出现在目录中。
+- 未配置 `MUSIC CATALOG` 或云端目录为空时，自动回退到 `/storage/music` 的本地音乐。
+- 目录 URL 和 token 在 Portal 的 `MUSIC CATALOG` 中配置；公网使用 `https://.../watch/api/v1/music`。
 
 ## 4. Shell 脚本
 

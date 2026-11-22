@@ -43,6 +43,8 @@ static char s_delete_name[48];
 static int64_t s_delete_until;
 static int64_t s_last_refresh;
 static bool s_video_configured;
+static bool s_music_configured;
+static bool s_music_remote;
 
 static void free_img(void)
 {
@@ -80,9 +82,19 @@ static void refresh(void)
         return;
     }
 
-    if (s_tab == 0) s_count = watch_storage_list_music(s_files, 24);
-    else if (s_tab == 1) s_count = watch_storage_list(WS_VIDEO_DIR, ".jpg,.jpeg", s_files, 24);
-    else s_count = 0;
+    if (s_tab == 0) {
+        /* Cloud catalog takes priority; fall back to /storage/music when it
+         * is not configured or has no playable entries. */
+        s_count = s_music_configured ? watch_media_catalog_count() : 0;
+        s_music_remote = s_count > 0;
+        if (!s_count) {
+            s_count = watch_storage_list_music(s_files, 24);
+        }
+    } else if (s_tab == 1) {
+        s_count = watch_storage_list(WS_VIDEO_DIR, ".jpg,.jpeg", s_files, 24);
+    } else {
+        s_count = 0;
+    }
 
     if (s_tab == 1 && keep[0]) {
         for (int i = 0; i < s_count; i++) {
@@ -202,6 +214,8 @@ static void media_enter(void)
     watch_ui_set_fullscreen(false);
     watch_media_init();
     s_video_configured = watch_config_has_video();
+    s_music_configured = watch_config_has_music();
+    if (s_music_configured) watch_media_catalog_fetch();
     refresh();
 }
 
@@ -217,7 +231,11 @@ static void play_selected(void)
 {
     if (!s_count || s_tab != 0) return;
     watch_media_stop();
-    watch_media_play(s_files[s_sel]);
+    if (s_music_remote) {
+        watch_media_play_remote(s_sel);
+    } else {
+        watch_media_play(s_files[s_sel]);
+    }
 }
 
 static void switch_tab(int tab)
@@ -239,6 +257,11 @@ static void switch_tab(int tab)
     s_last_refresh = esp_timer_get_time();
     refresh();
     if (s_tab == 1 && s_count) load_image();
+    if (s_tab == 0) {
+        s_music_configured = watch_config_has_music();
+        if (s_music_configured) watch_media_catalog_fetch();
+        refresh();
+    }
     if (s_tab == 2) {
         s_video_configured = watch_config_has_video();
         watch_video_start();
@@ -411,9 +434,14 @@ static void media_render(void)
     watch_gfx_hline(WS_SAFE, 52, WS_SCREEN_W - 2 * WS_SAFE, WS_COLOR_DIM);
 
     if (s_tab != 2 && !s_count) {
-        watch_gfx_text(WS_SAFE, 66, s_tab == 0 ? "NO MUSIC FILES" : "NO PICTURES", WS_COLOR_AMBER, 1);
-        watch_gfx_text(WS_SAFE, 82, "Upload via Settings /", WS_COLOR_GRAY, 1);
-        watch_gfx_text(WS_SAFE, 94, "portal page.", WS_COLOR_GRAY, 1);
+        const char *empty = s_tab == 0 ?
+            (s_music_configured ? "NO CLOUD MUSIC" : "NO MUSIC FILES") : "NO PICTURES";
+        watch_gfx_text(WS_SAFE, 66, empty, WS_COLOR_AMBER, 1);
+        watch_gfx_text(WS_SAFE, 82, s_tab == 0 && s_music_configured ?
+                       "Check MUSIC CATALOG" : "Upload via Settings /",
+                       WS_COLOR_GRAY, 1);
+        watch_gfx_text(WS_SAFE, 94, s_tab == 0 && s_music_configured ?
+                       "or upload to server." : "portal page.", WS_COLOR_GRAY, 1);
     }
     int rows = s_tab == 0 ? 10 : (s_tab == 1 ? 3 : 3);
     for (int row = 0; row < rows; row++) {
@@ -425,6 +453,11 @@ static void media_render(void)
         if (s_tab == 2) {
             ws_video_item_t it;
             if (!watch_video_catalog_get(idx, &it)) break;
+            watch_gfx_printf(WS_SAFE, y, sel ? WS_COLOR_BLACK : WS_COLOR_GRAY, 1,
+                             "%c %.31s", sel ? '>' : ' ', it.title);
+        } else if (s_tab == 0 && s_music_remote) {
+            ws_music_item_t it;
+            if (!watch_media_catalog_get(idx, &it)) break;
             watch_gfx_printf(WS_SAFE, y, sel ? WS_COLOR_BLACK : WS_COLOR_GRAY, 1,
                              "%c %.31s", sel ? '>' : ' ', it.title);
         } else {
@@ -556,6 +589,9 @@ static void media_tick(void)
         int old_count = s_count;
         refresh();
         if (s_count == 0 && old_count != 0) free_img();
+    } else if (s_tab == 0 && s_music_configured && now - s_last_refresh > 500000) {
+        s_last_refresh = now;
+        refresh();
     } else if (s_tab == 2 && now - s_last_refresh > 500000) {
         s_last_refresh = now;
         int old_count = s_count;

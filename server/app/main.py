@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -30,6 +31,15 @@ from .wsv2 import WSV2Error, stream_video
 
 __version__ = "1.0.0"
 logger = logging.getLogger("watch-server")
+
+# The watch side has an MP3/WAV/AAC simple decoder; do not advertise FLAC/OGG
+# files that it cannot play.
+WATCH_AUDIO_FORMATS = {
+    ".mp3": "mp3",
+    ".wav": "wav",
+    ".aac": "aac",
+    ".m4a": "m4a",
+}
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -339,6 +349,68 @@ def create_app(
                 "ws_url": "/watch/api/v1/videos/%s/ws" % record["id"],
             })
         return {"version": 1, "items": items}
+
+    @app.get("/watch/api/v1/music")
+    async def watch_music_catalog(request: Request):
+        check_watch_http(settings, request)
+        items = []
+        for record in db.list("audio", limit=64):
+            suffix = Path(record.get("original_name") or "").suffix.lower()
+            fmt = WATCH_AUDIO_FORMATS.get(suffix)
+            if not fmt:
+                continue
+            items.append({
+                "id": record["id"],
+                "title": truncate_utf8(record["title"], 47),
+                "duration_ms": int(record.get("duration_ms") or 0),
+                "size": int(record.get("size") or 0),
+                "format": fmt,
+                "stream_url": "/watch/api/v1/music/%s/stream" % record["id"],
+            })
+            if len(items) >= 24:
+                break
+        return {"version": 1, "items": items}
+
+    @app.api_route("/watch/api/v1/music/{media_id}/stream", methods=["GET", "HEAD"])
+    async def watch_music_stream(media_id: str, request: Request):
+        check_watch_http(settings, request)
+        record = db.get(media_id)
+        if not record or record["kind"] != "audio":
+            raise HTTPException(404, detail="music not found")
+        suffix = Path(record.get("original_name") or "").suffix.lower()
+        if suffix not in WATCH_AUDIO_FORMATS:
+            raise HTTPException(404, detail="unsupported audio format")
+        path = media.path_for(record)
+        if not path.is_file():
+            raise HTTPException(404, detail="music file is missing")
+
+        size = path.stat().st_size
+        start, end, partial = _parse_range(request.headers.get("range"), size)
+        length = max(0, end - start + 1)
+        content_type = (
+            mimetypes.guess_type(record.get("original_name") or "")[0]
+            or record.get("mime")
+            or "application/octet-stream"
+        )
+        headers = {
+            "Content-Type": content_type,
+            "Content-Length": str(length),
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store",
+            "Content-Disposition": "inline; filename*=UTF-8''%s" % quote(
+                record.get("original_name") or "music"
+            ),
+        }
+        if partial:
+            headers["Content-Range"] = "bytes %d-%d/%d" % (start, end, size)
+        if request.method == "HEAD":
+            return Response(status_code=206 if partial else 200, headers=headers)
+        return StreamingResponse(
+            iter_file(path, start, end),
+            status_code=206 if partial else 200,
+            media_type=content_type,
+            headers=headers,
+        )
 
     @app.get("/watch/api/v1/videos/{media_id}/stream")
     async def watch_stream(media_id: str, request: Request):

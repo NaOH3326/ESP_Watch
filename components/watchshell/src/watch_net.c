@@ -87,6 +87,11 @@ static const char *html_page =
     "placeholder='http://host:8080/watch/api/v1/videos'><br>"
     "TOKEN <input id=video_token name=video_token size=42><br>"
     "<button type=submit>SAVE VIDEO</button></form></fieldset>"
+    "<fieldset><legend>MUSIC CATALOG</legend><form id=mus>"
+    "URL <input id=music_url name=music_url size=52 "
+    "placeholder='http://host:8080/watch/api/v1/music'><br>"
+    "TOKEN <input id=music_token name=music_token size=42><br>"
+    "<button type=submit>SAVE MUSIC</button></form></fieldset>"
     "<fieldset><legend>SCRIPT / MEDIA UPLOAD</legend>"
     "<input id=file type=file accept='.wsh,.sh,.mp3,.wav,.aac,.jpg,.jpeg'><button id=up>UPLOAD</button>"
     "<p class=muted>Scripts: .wsh/.sh &rarr; /storage/scripts &nbsp; "
@@ -114,6 +119,9 @@ static const char *html_page =
     "let b=new URLSearchParams(new FormData(e.target)).toString();"
     "await send('/api/config',b,'application/x-www-form-urlencoded');};"
     "document.getElementById('vid').onsubmit=async e=>{e.preventDefault();"
+    "let b=new URLSearchParams(new FormData(e.target)).toString();"
+    "await send('/api/config',b,'application/x-www-form-urlencoded');};"
+    "document.getElementById('mus').onsubmit=async e=>{e.preventDefault();"
     "let b=new URLSearchParams(new FormData(e.target)).toString();"
     "await send('/api/config',b,'application/x-www-form-urlencoded');};"
     "document.getElementById('up').onclick=async()=>{"
@@ -196,6 +204,7 @@ static esp_err_t config_post(httpd_req_t *req)
 
     char ssid[64] = {0}, pass[64] = {0}, url[192] = {0}, token[192] = {0};
     char vurl[192] = {0}, vtoken[192] = {0};
+    char murl[192] = {0}, mtoken[192] = {0};
     bool changed_wifi = false;
     if (form_get(body, "ssid", ssid, sizeof(ssid)) && ssid[0]) {
         form_get(body, "pass", pass, sizeof(pass));
@@ -212,6 +221,10 @@ static esp_err_t config_post(httpd_req_t *req)
         form_get(body, "video_token", vtoken, sizeof(vtoken));
         watch_config_set_video(vurl, vtoken);
         watch_video_stop_playback();
+    }
+    if (form_get(body, "music_url", murl, sizeof(murl))) {
+        form_get(body, "music_token", mtoken, sizeof(mtoken));
+        watch_config_set_music(murl, mtoken);
     }
     if (changed_wifi) {
         httpd_resp_send(req, "saved; rebooting into station mode...\n", HTTPD_RESP_USE_STRLEN);

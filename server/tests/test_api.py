@@ -6,6 +6,7 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 FAKE_VIDEO = (b"\x00\x00\x00\x18ftypmp42" + bytes(range(250)) * 4)[:1024]
+FAKE_AUDIO = b"ID3\x04\x00\x00\x00\x00\x00\x00" + bytes(range(128))
 
 
 def test_health_and_status(client):
@@ -85,6 +86,50 @@ def test_watch_catalog_requires_token(client):
         "/watch/api/v1/videos",
         headers={"Authorization": "Bearer wrong"},
     ).status_code == 401
+
+
+def test_watch_music_catalog_and_stream(client):
+    response = client.post(
+        "/api/files",
+        files={"file": ("song.mp3", FAKE_AUDIO, "audio/mpeg")},
+    )
+    assert response.status_code == 201, response.text
+    item = response.json()
+    assert item["kind"] == "audio"
+
+    catalog = client.get(
+        "/watch/api/v1/music",
+        headers={"Authorization": "Bearer watch-token"},
+    )
+    assert catalog.status_code == 200
+    payload = catalog.json()
+    assert payload["version"] == 1
+    assert payload["items"][0]["id"] == item["id"]
+    assert payload["items"][0]["format"] == "mp3"
+    assert payload["items"][0]["stream_url"].endswith("/stream")
+
+    stream = client.get(
+        "/watch/api/v1/music/%s/stream" % item["id"],
+        headers={"Authorization": "Bearer watch-token"},
+    )
+    assert stream.status_code == 200
+    assert stream.content == FAKE_AUDIO
+    assert stream.headers["content-type"].startswith("audio/")
+
+    assert client.get("/watch/api/v1/music").status_code == 401
+
+
+def test_watch_music_catalog_skips_unsupported_formats(client):
+    response = client.post(
+        "/api/files",
+        files={"file": ("track.ogg", b"OggS" + b"\x00" * 32, "audio/ogg")},
+    )
+    assert response.status_code == 201
+    catalog = client.get(
+        "/watch/api/v1/music",
+        headers={"Authorization": "Bearer watch-token"},
+    ).json()
+    assert catalog["items"] == []
 
 
 def test_watch_video_websocket_streams_wsv2(client, monkeypatch):

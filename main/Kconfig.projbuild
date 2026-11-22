@@ -31,6 +31,17 @@ menu "WatchShell"
         string "Default video catalog token"
         default ""
 
+    config WATCH_MUSIC_URL
+        string "Default music catalog URL"
+        default ""
+        help
+            返回 {"items":[...]} 的 HTTP(S) URL，例如
+            http://192.168.1.10:8080/watch/api/v1/music
+
+    config WATCH_MUSIC_TOKEN
+        string "Default music catalog token"
+        default ""
+
     config WATCH_AP_SSID
         string "Configuration AP SSID"
         default "ESP-Watch"

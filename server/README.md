@@ -225,6 +225,9 @@ AI TOKEN:        .env 中的 WATCH_TOKEN
 
 VIDEO CATALOG:   http://<服务器 IP>:8080/watch/api/v1/videos
 VIDEO TOKEN:     .env 中的 WATCH_TOKEN
+
+MUSIC CATALOG:   http://<服务器 IP>:8080/watch/api/v1/music
+MUSIC TOKEN:     .env 中的 WATCH_TOKEN
 ```
 
 公网部署请使用 HTTPS/WSS：
@@ -232,6 +235,7 @@ VIDEO TOKEN:     .env 中的 WATCH_TOKEN
 ```text
 AI URL:          wss://watch.example.com/v1/ws
 VIDEO CATALOG:   https://watch.example.com/watch/api/v1/videos
+MUSIC CATALOG:   https://watch.example.com/watch/api/v1/music
 ```
 
 `deploy/Caddyfile` 提供了反向代理模板。Caddy 会自动申请证书，并把 SSE / WSV2 的 chunked 响应及时刷新。
@@ -456,6 +460,8 @@ curl -s http://127.0.0.1:8080/api/status | python3 -m json.tool
 | GET | `/watch/api/v1/videos` | 最多 16 条目录，标题截断 47 字节；包含 `stream_url` 和 `ws_url` |
 | GET | `/watch/api/v1/videos/{id}/stream` | `application/vnd.wsv2` chunked 流（HTTP 兼容回退） |
 | WS | `/watch/api/v1/videos/{id}/ws` | WSV2 音视频 WebSocket 流；每条 binary message 一个帧 |
+| GET | `/watch/api/v1/music` | 最多 24 首可播放音乐（MP3/WAV/AAC/M4A），返回 `format` 和 `stream_url` |
+| GET/HEAD | `/watch/api/v1/music/{id}/stream` | 原始音频字节流，支持 Range |
 | WS | `/v1/ws`、`/ai` | AI 实时通道 |
 
 `WATCH_TOKEN` 为空时允许无鉴权局域网访问；公网部署务必设置。
