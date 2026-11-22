@@ -7,6 +7,7 @@
 #include "../../main/board_pins.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -15,6 +16,8 @@ static i2s_chan_handle_t s_tx;
 static i2s_chan_handle_t s_rx;
 static volatile bool s_ready;
 static int s_volume = 60;
+static int64_t s_init_retry_after;
+static bool s_init_warned;
 static SemaphoreHandle_t s_lock;
 static StaticSemaphore_t s_lock_storage;
 static portMUX_TYPE s_lock_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -46,16 +49,22 @@ static void apply_gain(int16_t *samples, int n)
 static esp_err_t init_locked(void)
 {
     if (s_ready) return ESP_OK;
+    int64_t now = esp_timer_get_time();
+    if (now < s_init_retry_after) return ESP_ERR_NO_MEM;
 
     i2s_chan_handle_t tx = NULL;
     i2s_chan_handle_t rx = NULL;
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-    chan_cfg.dma_desc_num = 6;
+    chan_cfg.dma_desc_num = 4;
     chan_cfg.dma_frame_num = 240;
     chan_cfg.auto_clear = true;
     esp_err_t err = i2s_new_channel(&chan_cfg, &tx, &rx);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "i2s_new_channel: %s", esp_err_to_name(err));
+        if (!s_init_warned) {
+            s_init_warned = true;
+            ESP_LOGE(TAG, "i2s_new_channel: %s", esp_err_to_name(err));
+        }
+        s_init_retry_after = now + 5000000;
         return err;
     }
     i2s_std_config_t cfg = {
@@ -70,26 +79,38 @@ static esp_err_t init_locked(void)
             .invert_flags = { false, false, false },
         },
     };
-    if ((err = i2s_channel_init_std_mode(tx, &cfg)) != ESP_OK ||
-        (err = i2s_channel_init_std_mode(rx, &cfg)) != ESP_OK ||
-        (err = i2s_channel_enable(tx)) != ESP_OK ||
-        (err = i2s_channel_enable(rx)) != ESP_OK) {
-        ESP_LOGE(TAG, "I2S init: %s", esp_err_to_name(err));
-        if (tx) {
-            i2s_channel_disable(tx);
-            i2s_del_channel(tx);
-        }
-        if (rx) {
-            i2s_channel_disable(rx);
-            i2s_del_channel(rx);
-        }
-        return err;
-    }
+    bool tx_ready = false;
+    bool rx_ready = false;
+    if ((err = i2s_channel_init_std_mode(tx, &cfg)) != ESP_OK) goto init_fail;
+    if ((err = i2s_channel_init_std_mode(rx, &cfg)) != ESP_OK) goto init_fail;
+    if ((err = i2s_channel_enable(tx)) != ESP_OK) goto init_fail;
+    tx_ready = true;
+    if ((err = i2s_channel_enable(rx)) != ESP_OK) goto init_fail;
+    rx_ready = true;
+
     s_tx = tx;
     s_rx = rx;
     s_ready = true;
+    s_init_warned = false;
+    s_init_retry_after = 0;
     ESP_LOGI(TAG, "I2S %d Hz stereo ready", WS_AUDIO_RATE);
     return ESP_OK;
+
+init_fail:
+    if (!s_init_warned) {
+        s_init_warned = true;
+        ESP_LOGE(TAG, "I2S init: %s", esp_err_to_name(err));
+    }
+    s_init_retry_after = now + 5000000;
+    if (tx) {
+        if (tx_ready) i2s_channel_disable(tx);
+        i2s_del_channel(tx);
+    }
+    if (rx) {
+        if (rx_ready) i2s_channel_disable(rx);
+        i2s_del_channel(rx);
+    }
+    return err;
 }
 
 esp_err_t watch_audio_init(void)

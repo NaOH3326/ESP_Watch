@@ -155,6 +155,21 @@ static int pcm_to_mono16(const uint8_t *src, uint32_t bytes, int channels,
     return (int)frames;
 }
 
+/* Decoded PCM and the mono conversion buffer are large and do not need DMA
+ * capability.  Keep them in PSRAM so I2S DMA descriptors still have enough
+ * internal RAM; fall back to internal heap on boards without PSRAM. */
+static void *music_alloc(size_t size)
+{
+    void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(size);
+}
+
+static void *music_realloc(void *ptr, size_t size)
+{
+    void *p = heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : realloc(ptr, size);
+}
+
 static esp_http_client_handle_t http_open(const char *url, const char *accept)
 {
     esp_http_client_config_t cfg = {
@@ -225,6 +240,11 @@ static void media_task(void *arg)
         }
     }
 
+    esp_err_t audio_err = watch_audio_init();
+    if (audio_err != ESP_OK) {
+        ESP_LOGW(TAG, "audio init before decode failed: %s", esp_err_to_name(audio_err));
+    }
+
     esp_audio_simple_dec_cfg_t cfg = {
         .dec_type = decoder_type(job->format[0] ? job->format : job->source),
         .dec_cfg = NULL,
@@ -237,12 +257,16 @@ static void media_task(void *arg)
         goto done;
     }
     inbuf = malloc(MUSIC_INPUT_CHUNK);
-    pcm = malloc(pcm_cap);
-    mono = malloc(mono_cap);
+    pcm = music_alloc(pcm_cap);
+    mono = music_alloc(mono_cap);
     if (!inbuf || !pcm || !mono) {
         ESP_LOGE(TAG, "no decode buffer");
         goto done;
     }
+    ESP_LOGI(TAG, "buffers ready, internal=%u dma=%u psram=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     bool info_ready = false;
     bool first_written = false;
@@ -287,14 +311,14 @@ static void media_task(void *arg)
                     failed = true;
                     break;
                 }
-                uint8_t *bigger = realloc(pcm, need);
+                uint8_t *bigger = music_realloc(pcm, need);
                 if (!bigger) {
                     ESP_LOGE(TAG, "pcm realloc %u failed", (unsigned)need);
                     failed = true;
                     break;
                 }
                 pcm = bigger;
-                int16_t *bigger_mono = realloc(mono, (size_t)need * 2);
+                int16_t *bigger_mono = music_realloc(mono, (size_t)need * 2);
                 if (!bigger_mono) {
                     ESP_LOGE(TAG, "mono realloc %u failed", (unsigned)(need * 2));
                     failed = true;
