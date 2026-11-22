@@ -25,10 +25,13 @@
 #define MEDIA_VIDEO_BTN_Y   250
 #define MEDIA_VIDEO_BTN_W   68
 #define MEDIA_VIDEO_BTN_H   22
-#define MEDIA_MUSIC_BTN_Y   250
-#define MEDIA_MUSIC_BTN_W   42
-#define MEDIA_MUSIC_BTN_H   22
-#define MEDIA_MUSIC_BTN_STEP 44
+#define MEDIA_MUSIC_ROW1_Y  204
+#define MEDIA_MUSIC_ROW1_H  30
+#define MEDIA_MUSIC_ROW2_Y  238
+#define MEDIA_MUSIC_ROW2_H  32
+#define MEDIA_MUSIC_BTN_W   68
+#define MEDIA_MUSIC_BTN_GAP 4
+#define MEDIA_MUSIC_WIDE_W  104
 
 static char s_files[24][48];
 static int s_count;
@@ -325,16 +328,17 @@ static void media_event(const ws_event_t *ev)
         }
         return;
     }
-    if (s_tab == 0 && ev->y > 246) {
-        int x = ev->x - WS_SAFE;
-        if (x < MEDIA_MUSIC_BTN_STEP) {
-            watch_media_catalog_fetch();
-            refresh();
-        } else if (x < 2 * MEDIA_MUSIC_BTN_STEP) {
-            play_selected();
-        } else if (x < 3 * MEDIA_MUSIC_BTN_STEP) {
-            watch_media_stop();
-        } else if (x < 4 * MEDIA_MUSIC_BTN_STEP) {
+    if (s_tab == 0 && ev->y >= MEDIA_MUSIC_ROW1_Y - 4) {
+        if (ev->y < MEDIA_MUSIC_ROW2_Y - 2) {
+            if (ev->x < WS_SAFE + MEDIA_MUSIC_BTN_W + 2) {
+                watch_media_catalog_fetch();
+                refresh();
+            } else if (ev->x < WS_SAFE + 2 * (MEDIA_MUSIC_BTN_W + MEDIA_MUSIC_BTN_GAP) - 2) {
+                play_selected();
+            } else {
+                watch_media_stop();
+            }
+        } else if (ev->x < WS_SAFE + MEDIA_MUSIC_WIDE_W + 4) {
             int v = watch_audio_volume() - 10;
             if (v < 0) v = 0;
             watch_audio_set_volume(v);
@@ -478,36 +482,40 @@ static void media_render(void)
     }
 
     if (s_tab == 0) {
-        watch_gfx_hline(WS_SAFE, 164, WS_SCREEN_W - 2 * WS_SAFE, WS_COLOR_DIM);
+        watch_gfx_hline(WS_SAFE, 156, WS_SCREEN_W - 2 * WS_SAFE, WS_COLOR_DIM);
         const char *cur = watch_media_current();
-        watch_gfx_text(WS_SAFE, 174, "NOW", WS_COLOR_DIM, 1);
+        watch_gfx_text(WS_SAFE, 160, "NOW", WS_COLOR_DIM, 1);
         if (cur && cur[0]) {
-            watch_gfx_text(WS_SAFE, 186, cur, WS_COLOR_WHITE, 1);
-            int vol = watch_audio_volume();
-            watch_gfx_text(WS_SAFE, 202, "VOL", WS_COLOR_DIM, 1);
-            watch_gfx_rect(40, 202, 146, 7, WS_COLOR_DIM);
-            watch_gfx_fill_rect(41, 203, 144 * vol / 100, 5, WS_COLOR_GREEN);
-            watch_gfx_printf(190, 202, WS_COLOR_GREEN, 1, "%3d%%", vol);
-            if (watch_media_busy()) {
-                int phase = (int)((esp_timer_get_time() / 150000) % 12);
-                for (int i = 0; i < 12; i++) {
-                    int h = 3 + (i * 7 + phase) % 18;
-                    watch_gfx_vline(60 + i * 10, 228 - h, h, i % 3 ? WS_COLOR_GREEN : WS_COLOR_CYAN);
-                }
-            }
+            char now[36];
+            snprintf(now, sizeof(now), "%.35s", cur);
+            watch_gfx_text(WS_SAFE, 172, now, WS_COLOR_WHITE, 1);
         } else {
-            watch_gfx_text(WS_SAFE, 186, "nothing playing", WS_COLOR_GRAY, 1);
+            watch_gfx_text(WS_SAFE, 172, "nothing playing", WS_COLOR_GRAY, 1);
         }
-        static const char *const labels[] = {"SYNC", "PLAY", "STOP", "VOL-", "VOL+"};
-        static const uint16_t colors[] = {
-            WS_COLOR_CYAN, WS_COLOR_GREEN, WS_COLOR_RED, WS_COLOR_CYAN, WS_COLOR_CYAN
+        int vol = watch_audio_volume();
+        watch_gfx_text(WS_SAFE, 188, "VOL", WS_COLOR_DIM, 1);
+        watch_gfx_rect(40, 188, 146, 7, WS_COLOR_DIM);
+        watch_gfx_fill_rect(41, 189, 144 * vol / 100, 5, WS_COLOR_GREEN);
+        watch_gfx_printf(190, 188, WS_COLOR_GREEN, 1, "%3d%%", vol);
+
+        static const char *const row1[] = {"SYNC", "PLAY", "STOP"};
+        static const uint16_t row1_colors[] = {
+            WS_COLOR_CYAN, WS_COLOR_GREEN, WS_COLOR_RED
         };
-        for (int i = 0; i < 5; i++) {
-            int bx = WS_SAFE + i * MEDIA_MUSIC_BTN_STEP;
-            watch_gfx_rect(bx, MEDIA_MUSIC_BTN_Y, MEDIA_MUSIC_BTN_W,
-                           MEDIA_MUSIC_BTN_H, colors[i]);
+        for (int i = 0; i < 3; i++) {
+            int bx = WS_SAFE + i * (MEDIA_MUSIC_BTN_W + MEDIA_MUSIC_BTN_GAP);
+            watch_gfx_rect(bx, MEDIA_MUSIC_ROW1_Y, MEDIA_MUSIC_BTN_W,
+                           MEDIA_MUSIC_ROW1_H, row1_colors[i]);
             watch_gfx_text_center(bx + MEDIA_MUSIC_BTN_W / 2,
-                                  MEDIA_MUSIC_BTN_Y + 6, labels[i], colors[i], 1);
+                                  MEDIA_MUSIC_ROW1_Y + 6, row1[i], row1_colors[i], 2);
+        }
+        static const char *const row2[] = {"VOL-", "VOL+"};
+        for (int i = 0; i < 2; i++) {
+            int bx = WS_SAFE + i * (MEDIA_MUSIC_WIDE_W + MEDIA_MUSIC_BTN_GAP);
+            watch_gfx_rect(bx, MEDIA_MUSIC_ROW2_Y, MEDIA_MUSIC_WIDE_W,
+                           MEDIA_MUSIC_ROW2_H, WS_COLOR_CYAN);
+            watch_gfx_text_center(bx + MEDIA_MUSIC_WIDE_W / 2,
+                                  MEDIA_MUSIC_ROW2_Y + 7, row2[i], WS_COLOR_CYAN, 2);
         }
     } else if (s_tab == 1) {
         watch_gfx_hline(WS_SAFE, 90, WS_SCREEN_W - 2 * WS_SAFE, WS_COLOR_DIM);

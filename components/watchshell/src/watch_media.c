@@ -8,6 +8,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec.h"
+#include "esp_audio_simple_dec_default.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -21,8 +22,11 @@
 static const char *TAG = "WATCH_MEDIA";
 
 #define MUSIC_CATALOG_BODY_MAX (48 * 1024)
-#define MUSIC_HTTP_TIMEOUT_MS  8000
+#define MUSIC_HTTP_TIMEOUT_MS  20000
 #define MUSIC_INPUT_CHUNK      4096
+#define MUSIC_PCM_CAP          (16 * 1024)
+#define MUSIC_MONO_CAP         (32 * 1024)
+#define MUSIC_PCM_MAX          (256 * 1024)
 
 static volatile bool s_busy;
 static volatile bool s_stop;
@@ -104,8 +108,51 @@ static bool resolve_catalog_url(const char *base, const char *ref, char *out, si
 static esp_audio_simple_dec_type_t decoder_type(const char *format)
 {
     if (suffix(format, "wav")) return ESP_AUDIO_SIMPLE_DEC_TYPE_WAV;
-    if (suffix(format, "aac") || suffix(format, "m4a")) return ESP_AUDIO_SIMPLE_DEC_TYPE_AAC;
+    if (suffix(format, "m4a")) return ESP_AUDIO_SIMPLE_DEC_TYPE_M4A;
+    if (suffix(format, "aac")) return ESP_AUDIO_SIMPLE_DEC_TYPE_AAC;
     return ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
+}
+
+/* Decoders return PCM in their native layout: MP3/AAC are usually 16-bit
+ * stereo, WAV may be 8/16/24/32-bit.  watch_audio_write() expects mono
+ * int16_t, so convert here instead of treating interleaved stereo bytes as
+ * mono samples (which produces silence/noise at the wrong rate). */
+static int pcm_to_mono16(const uint8_t *src, uint32_t bytes, int channels,
+                         int bits, int16_t *dst, size_t dst_samples)
+{
+    if (!src || !dst || bytes == 0 || dst_samples == 0) return 0;
+    if (channels < 1) channels = 1;
+    if (bits != 8 && bits != 16 && bits != 24 && bits != 32) bits = 16;
+    int sample_bytes = bits / 8;
+    uint32_t frame_bytes = (uint32_t)sample_bytes * (uint32_t)channels;
+    uint32_t frames = bytes / frame_bytes;
+    if (frames > dst_samples) frames = (uint32_t)dst_samples;
+
+    for (uint32_t i = 0; i < frames; i++) {
+        int32_t sum = 0;
+        for (int c = 0; c < channels; c++) {
+            const uint8_t *p = src + (size_t)i * frame_bytes +
+                               (size_t)c * sample_bytes;
+            int32_t s = 0;
+            if (bits == 8) {
+                s = ((int32_t)p[0] - 128) << 8;
+            } else if (bits == 16) {
+                s = (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+            } else if (bits == 24) {
+                uint32_t u = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+                             ((uint32_t)p[2] << 16);
+                if (u & 0x800000u) u |= 0xff000000u;
+                s = (int32_t)u >> 8;
+            } else {
+                uint32_t u = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+                             ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+                s = (int32_t)u >> 16;
+            }
+            sum += s;
+        }
+        dst[i] = (int16_t)(sum / channels);
+    }
+    return (int)frames;
 }
 
 static esp_http_client_handle_t http_open(const char *url, const char *accept)
@@ -158,11 +205,18 @@ static void media_task(void *arg)
     esp_audio_simple_dec_handle_t dec = NULL;
     uint8_t *inbuf = NULL;
     uint8_t *pcm = NULL;
+    int16_t *mono = NULL;
+    size_t pcm_cap = MUSIC_PCM_CAP;
+    size_t mono_cap = MUSIC_MONO_CAP;
+    bool failed = false;
 
     if (job->remote) {
         ESP_LOGI(TAG, "remote stream start: %s", job->title);
         in.http = http_open(job->source, "audio/*,application/octet-stream");
         if (!in.http) goto done;
+        ESP_LOGI(TAG, "remote HTTP %d, content-length=%lld",
+                 esp_http_client_get_status_code(in.http),
+                 (long long)esp_http_client_get_content_length(in.http));
     } else {
         in.file = fopen(job->source, "rb");
         if (!in.file) {
@@ -183,34 +237,132 @@ static void media_task(void *arg)
         goto done;
     }
     inbuf = malloc(MUSIC_INPUT_CHUNK);
-    pcm = malloc(16384);
-    if (!inbuf || !pcm) {
+    pcm = malloc(pcm_cap);
+    mono = malloc(mono_cap);
+    if (!inbuf || !pcm || !mono) {
         ESP_LOGE(TAG, "no decode buffer");
         goto done;
     }
 
+    bool info_ready = false;
+    bool first_written = false;
+    bool write_warned = false;
+    uint32_t rate = 16000;
+    int channels = 1;
+    int bits = 16;
+    ESP_LOGI(TAG, "audio volume %d%%", watch_audio_volume());
+
     while (!s_stop) {
         int got = input_read(&in, inbuf, MUSIC_INPUT_CHUNK);
-        if (got <= 0) break;
-        esp_audio_simple_dec_raw_t raw = { .buffer = inbuf, .len = (uint32_t)got };
+        if (got <= 0) {
+            if (in.http) {
+                ESP_LOGI(TAG, "stream read end: %d, complete=%d, status=%d",
+                         got, (int)esp_http_client_is_complete_data_received(in.http),
+                         esp_http_client_get_status_code(in.http));
+            } else if (got < 0) {
+                ESP_LOGW(TAG, "file read failed: %s", job->source);
+            }
+            break;
+        }
+        bool eos = in.file && got < MUSIC_INPUT_CHUNK;
+        if (in.http) eos = esp_http_client_is_complete_data_received(in.http);
+        esp_audio_simple_dec_raw_t raw = {
+            .buffer = inbuf,
+            .len = (uint32_t)got,
+            .eos = eos,
+        };
+        /* Do not overwrite inbuf until this loop has consumed it: the decoder
+         * may keep a frame cached when it returns less than `got`. */
         while (raw.len > 0 && !s_stop) {
-            esp_audio_simple_dec_out_t out = { .buffer = pcm, .len = 16384 };
+            esp_audio_simple_dec_out_t out = {
+                .buffer = pcm,
+                .len = (uint32_t)pcm_cap,
+            };
             ret = esp_audio_simple_dec_process(dec, &raw, &out);
-            if (ret == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH && out.needed_size <= 65536) {
-                uint8_t *bigger = realloc(pcm, out.needed_size);
-                if (!bigger) break;
+            if (ret == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
+                uint32_t need = out.needed_size;
+                if (need < pcm_cap * 2) need = (uint32_t)pcm_cap * 2;
+                if (need > MUSIC_PCM_MAX) {
+                    ESP_LOGE(TAG, "decoded frame too large: %u", (unsigned)need);
+                    failed = true;
+                    break;
+                }
+                uint8_t *bigger = realloc(pcm, need);
+                if (!bigger) {
+                    ESP_LOGE(TAG, "pcm realloc %u failed", (unsigned)need);
+                    failed = true;
+                    break;
+                }
                 pcm = bigger;
+                int16_t *bigger_mono = realloc(mono, (size_t)need * 2);
+                if (!bigger_mono) {
+                    ESP_LOGE(TAG, "mono realloc %u failed", (unsigned)(need * 2));
+                    failed = true;
+                    break;
+                }
+                mono = bigger_mono;
+                pcm_cap = need;
+                mono_cap = (size_t)need * 2;
                 continue;
             }
-            if (ret != ESP_AUDIO_ERR_OK && ret != ESP_AUDIO_ERR_CONTINUE) break;
-            if (out.decoded_size >= 2) {
+            if (ret == ESP_AUDIO_ERR_DATA_LACK) break;
+            if (ret != ESP_AUDIO_ERR_OK && ret != ESP_AUDIO_ERR_CONTINUE) {
+                ESP_LOGW(TAG, "decode error %d (consumed=%u, in=%u)",
+                         ret, (unsigned)raw.consumed, (unsigned)raw.len);
+                failed = true;
+                break;
+            }
+            if (out.decoded_size > 0) {
                 esp_audio_simple_dec_info_t info = {0};
                 esp_audio_simple_dec_get_info(dec, &info);
-                int rate = info.sample_rate ? (int)info.sample_rate : 16000;
-                watch_audio_write((int16_t *)pcm, (int)(out.decoded_size / 2), rate);
+                if (!info_ready) {
+                    if (info.sample_rate >= 8000 && info.sample_rate <= 192000) {
+                        rate = info.sample_rate;
+                    }
+                    if (info.channel >= 1 && info.channel <= 8) {
+                        channels = info.channel;
+                    }
+                    if (info.bits_per_sample == 8 || info.bits_per_sample == 16 ||
+                        info.bits_per_sample == 24 || info.bits_per_sample == 32) {
+                        bits = info.bits_per_sample;
+                    }
+                    info_ready = true;
+                    ESP_LOGI(TAG, "decoded audio: %u Hz, %d ch, %d bit, frame=%u",
+                             (unsigned)rate, channels, bits,
+                             (unsigned)out.decoded_size);
+                }
+
+                int samples = pcm_to_mono16(pcm, out.decoded_size, channels, bits,
+                                            mono, mono_cap / sizeof(int16_t));
+                if (samples > 0) {
+                    if (!first_written) {
+                        first_written = true;
+                        int64_t energy = 0;
+                        int peak = 0;
+                        for (int i = 0; i < samples; i++) {
+                            int v = mono[i];
+                            energy += v < 0 ? -v : v;
+                            if (v > peak) peak = v;
+                            if (-v > peak) peak = -v;
+                        }
+                        ESP_LOGI(TAG, "first PCM: %d samples, avg=%d, peak=%d",
+                                 samples, (int)(energy / samples), peak);
+                    }
+                    esp_err_t wr = watch_audio_write(mono, samples, (int)rate);
+                    if (wr != ESP_OK && !write_warned) {
+                        write_warned = true;
+                        ESP_LOGW(TAG, "audio write failed: %s", esp_err_to_name(wr));
+                    }
+                }
             }
-            if (raw.consumed == 0) break;
+
+            uint32_t used = raw.consumed;
+            if (used > raw.len) used = raw.len;
+            if (used == 0) break;
+            raw.buffer += used;
+            raw.len -= used;
         }
+        if (failed) break;
     }
 
     if (job->remote) ESP_LOGI(TAG, "remote stream stopped: %s", job->title);
@@ -221,6 +373,7 @@ done:
     if (dec) esp_audio_simple_dec_close(dec);
     free(inbuf);
     free(pcm);
+    free(mono);
     free(job->source);
     free(job);
     s_busy = false;
@@ -260,8 +413,13 @@ static bool wait_idle(void)
 
 void watch_media_init(void)
 {
+    static bool decoders_registered;
     if (!s_catalog_lock) s_catalog_lock = xSemaphoreCreateMutex();
-    esp_audio_dec_register_default();
+    if (!decoders_registered) {
+        decoders_registered = true;
+        esp_audio_dec_register_default();
+        esp_audio_simple_dec_register_default();
+    }
 }
 
 bool watch_media_play(const char *filename)

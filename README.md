@@ -211,7 +211,7 @@ waiting for download
 - 点条目后手表通过 HTTP 流式读取服务器原始音频字节，不做整首下载；MP3/WAV/AAC/M4A 由手表本地解码后直接写 I2S。
 - 服务端只返回手表支持的格式；`.ogg` / `.flac` 等不会出现在目录中。
 - 未配置 `MUSIC CATALOG` 或云端目录为空时，自动回退到 `/storage/music` 的本地音乐。
-- 底部按钮：`SYNC` 重新拉取云端目录，`PLAY` 播放选中歌曲，`STOP` 停止，`VOL-` / `VOL+` 调整音量；直接点列表行也会播放。
+- 底部两排大按钮：上排 `SYNC` / `PLAY` / `STOP`，下排 `VOL-` / `VOL+`；`SYNC` 重新拉取云端目录，`PLAY` 播放选中歌曲，直接点列表行也会播放。
 - 目录 URL 和 token 在 Portal 的 `MUSIC CATALOG` 中配置；公网使用 `https://.../watch/api/v1/music`。
 
 ## 4. Shell 脚本
