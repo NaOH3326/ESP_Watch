@@ -149,7 +149,6 @@ App：
 - 用户主动关机（Settings `POWER OFF` / REPL `poweroff`）后，下一次开机走正常启动。
 - 空闲自动关机后，下一次开机走快速启动：先显示 UI，再后台初始化存储/网络。
 - `CONFIG_WATCH_*` 可调整空闲时间、低电压阈值、警告秒数和 splash 时间。
-- 关机自启复盘、R107/R6/R15 改板记录见 [`Doc/POWEROFF_REPORT.md`](Doc/POWEROFF_REPORT.md)。
 
 ### 3.2 网络视频（VIDEO）
 
