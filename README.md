@@ -1,5 +1,7 @@
 # ESP_Watch / WatchShell
 
+开发机系统为Archlinux，不对任何windows兼容性做保证
+
 ESP32-S3R8 便携终端的轻量固件（16 MB Flash / 8 MB octal PSRAM）：
 
 | 目录 | 用途 |
