@@ -23,6 +23,15 @@ docker compose up -d --build
 
 详见 [`server/README.md`](server/README.md)。
 
+## 0. 获取代码
+
+```bash
+git clone https://github.com/NaOH3326/ESP_Watch.git
+cd ESP_Watch
+```
+
+当前验证的构建环境是 **ESP-IDF v6.0.1**（ESP32-S3 工具链）。仓库已包含音频编解码所需的预编译库，不需要额外下载。
+
 ## 1. 编译与烧录
 
 ```bash

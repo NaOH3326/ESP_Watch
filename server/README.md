@@ -2,6 +2,8 @@
 
 一个可独立部署的 ESP_Watch 服务端项目，面向低性能 Linux 主机、NAS、树莓派或小 VPS。
 
+我们不使用windows,请使用linux,爱来自ArchLinux
+
 它同时提供：
 
 - **AI 对话**：DeepSeek 官方 API（OpenAI-compatible，不再运行本地 LLM）；
