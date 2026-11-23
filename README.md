@@ -100,8 +100,6 @@ idf.py build flash monitor
 
 ## 3. 界面与操作
 
-转盘的轴心在屏幕下方，滑动时应用图标绕轴旋转，一次只让一个 App 占满屏幕：
-
 - 左右滑动：旋转转盘，首尾循环。
 - 点按：进入当前 App。
 - PWR 短按：转盘进入 / 普通 App 返回；Settings 中执行当前高亮项。
@@ -110,31 +108,18 @@ idf.py build flash monitor
 - Settings 内：LEFT/RIGHT 移动高亮，PWR 短按执行；按住约 0.7 秒返回；超过 1.2 秒则进入电源菜单；或从左边缘右滑返回。
 - GPIO45 / GPIO40：在 App 内翻页/选择；Settings 中用它们移动高亮。
 - 从屏幕左边缘向右滑：返回。
-- 从 App 返回转盘时保留该 App 的位置，不再跳回 WATCHFACE。
 
 ### GAMES → MATRIX
 
-- 全屏 40 列长字符串字符雨，每列独立速度/长度，头部白色、尾部绿色渐暗。
-- 进入后隐藏顶部状态栏；点屏幕返回 GAMES 菜单，短按 PWR 返回转盘。
-- 这是固件内绘制，不依赖 `.wsh` 的 `matrix` 命令；后者只是终端里的近似效果。
+- 黑客帝国字符雨效果
 
 ### GAMES → HEX
 
-- 二维正六边形运动学：只有中心位置、速度、角度和角速度，不再有 3D 顶点、棱弹簧或 `SETTLED` 状态。
-- 加速度计给出屏幕平面内的重力方向；陀螺仪 Z 轴驱动六边形旋转，摇晃时用高通加速度叠加惯性速度。
-- 在屏幕内的矩形场中受重力下落：按 240 px/30 mm、284 px/40 mm 换算为 `8000/7100 px/m`，使用 `9.80665 m/s²`，4 ms 固定子步运行。
-- 撞四壁使用 `0.55` 弹性回弹；切向只做轻微阻尼，没有静摩擦吸附，所以不会像上一版一样被边框“吸住”。
-- 底部 `-` / `+` 调整重力倍率 `0.1x–1.0x`（10 档，默认 `1.0x`，NVS 键 `hex_g`）；LEFT/RIGHT 也可调整。点屏幕不重置；PWR 返回转盘。
-- IMU 不可用时回退为竖直向下，并显示 `NO IMU / KINEMATIC`；手表平放时显示 `FLAT / TILT WATCH`。
-- 实机轴向：竖直向下时 `ax≈-g`，逆时针 90° 后 `ay≈g`；因此屏幕重力使用 `gx = -imu->ay`、`gy = -imu->ax`。
+- 二维六边形弹球
 
 ### GAMES → FLASK
 
-- 不是真实烧瓶形状，而是一个和 HEX 同风格的密闭矩形容器；内部是二维水面和波纹。
-- IMU 重力方向决定整个液面：液面始终垂直于重力，因此翻转 180° 后水会转到容器的另一侧，而不是永远贴着底部。
-- 高通加速度驱动左右/上下晃动；水面用一维弹簧/耦合方程计算，并叠加多条水面等高线/波峰高光，振幅和时间常数按手表使用场景调校，摇晃后不会立刻静止。
-- 水面限制在密闭容器内，不会倒出；不再绘制中间气泡，避免误认为点击目标。
-- 不提供点击重置；进入后只看 IMU 驱动，PWR 返回转盘。
+- 重力水平仪模拟
 
 App：
 
@@ -145,7 +130,7 @@ App：
 | SHELL | 脚本列表、UP/DOWN/EXEC/STOP、输出滚动、彩色 echo |
 | SENSORS | MOTION / COMPASS / ENV / SYSTEM 四页；罗盘 8 秒校准 |
 | MEDIA | MUSIC（本地 `/storage/music` 或服务器 `MUSIC CATALOG` 流式播放）、PICTURES（JPG/JPEG，支持浏览、全屏和两次确认删除）、VIDEO（WebSocket/HTTP 视频目录 + 主动拉流；兼容 WSV2 TCP 推送；支持全屏） |
-| GAMES | 贪吃蛇、2048、MATRIX 全屏长字符串字符雨、HEX 二维 IMU 六边形、FLASK 密闭容器水面，支持触摸滑动/按键 |
+| GAMES | 贪吃蛇、2048、MATRIX 字符雨、HEX 二维六边形弹球、FLASK水平仪，支持触摸滑动/按键 |
 | SETTINGS | Wi-Fi、Portal、主题、空闲关机、亮度、音量、关机、重启；按钮加大，支持左右键选择 + PWR 执行 |
 
 主题：
@@ -154,8 +139,7 @@ App：
 - `CHAOS`：彩色故障风格；只给前景着色，绿色点阵背景保持原样。
 - `ERROR`：红色故障风格，点阵/扫描线背景也转为红色；隐藏彩蛋；带横向撕裂断层和随机错误窗口，窗口会自动关闭。
 
-在表盘日期区域 **3 秒内连续点按 7 次** 可解锁 `ERROR` 主题；解锁后跨重启保留。
-在 SETTINGS 中按 `THEME` 关闭 ERROR 后，解锁状态会被清除，必须再次触发彩蛋才能获得。
+在表盘日期区域 **3 秒内连续点按 7 次** 可解锁 `ERROR` 主题
 
 ## 3.1 电源 / 低电压 / 启动
 
@@ -167,28 +151,7 @@ App：
 - `CONFIG_WATCH_*` 可调整空闲时间、低电压阈值、警告秒数和 splash 时间。
 - 关机自启复盘、R107/R6/R15 改板记录见 [`Doc/POWEROFF_REPORT.md`](Doc/POWEROFF_REPORT.md)。
 
-### 3.2 屏幕不亮 / 进入下载模式
-
-如果串口出现：
-
-```text
-rst:0x15 (USB_UART_CHIP_RESET),boot:0x0 (DOWNLOAD(USB/UART0))
-waiting for download
-```
-
-这是 ESP32-S3 ROM 在复位时检测到 **GPIO0 为低**，不是 WatchShell 关屏。`R107` 已拆，`GPIO0` 不再接 `PWRON`，
-必须由外部 10 kΩ 上拉到 VCC 保持高电平；`PWRON` 仍由 AXP2101 内部 100 kΩ 上拉到 VINT。请依次检查：
-
-1. 松开 PWR，等 1 秒再复位；`idf_monitor` 里按 `Ctrl+T` 然后 `Ctrl+R`，或重新执行
-   `idf.py -p /dev/ttyACM1 flash`。冷启动时 AXP2101 的 PWRON 可能短暂为低，第二次复位通常即可正常启动。
-2. 用万用表测 `GPIO0`（U2 pin5）/ `PWRON`（SW3 pin4）：静止时应接近 3.3 V。若为 0 V：
-   - 检查电源键是否卡住、`PWRON` 是否对地短路；
-   - 确认 `GPIO0` 与 `VCC(3.3 V)` 之间有 **10 kΩ 上拉**（R107 已拆，不能再依赖 PWRON/R15 路径）；
-   - 若 R15 仍焊在 VCC 上，可先拆掉；PWRON 有 AXP2101 内部 100 kΩ 上拉。
-   - 不要直接把 GPIO0 短接到 3.3 V。
-3. 正常启动应为 `boot:0x8 (SPI_FAST_FLASH_BOOT)`，随后出现 WatchShell 日志和背光。
-
-### 3.3 网络视频（VIDEO）
+### 3.2 网络视频（VIDEO）
 
 - PICTURES 和 VIDEO 页点击画面区域进入全屏（隐藏状态栏/Tab/控件），点屏幕或短按 PWR 退出。
 - 全屏画面使用 cover 方式铺满 240×284，超出部分裁切。
@@ -208,7 +171,7 @@ waiting for download
 - 详细协议见 [`Doc/VIDEO_STREAM.md`](Doc/VIDEO_STREAM.md)。
 - 离开 VIDEO 页会停止接收并释放视频帧。
 
-### 3.4 云端音乐（MUSIC）
+### 3.3 云端音乐（MUSIC）
 
 - 在服务器 Dashboard 上传 `.mp3` / `.wav` / `.aac` / `.m4a`，文件会登记为 `audio`。
 - 进入 `MEDIA → MUSIC` 时，手表优先请求 Portal 中配置的 `MUSIC CATALOG`，例如：
@@ -230,7 +193,7 @@ waiting for download
 
 ```text
 # name: demo
-# desc: colored echo + loop
+# esc: colored echo + loop
 clear
 echo green "WATCHSHELL"
 echo "inline {red}color{/} works"
@@ -262,7 +225,7 @@ hello / pong / stt / llm(start|delta|done) / tts / mcp JSON
 
 - 默认按住说话（PTT），不做常听唤醒，因此不需要 AEC。
 - AI 首屏只作为入口；聊天页才显示 PTT 和消息。PTT 需要按住约 220 ms 才启动录音，普通点按、滑动聊天记录或点击空白区域不会触发空 ASR。
-- 服务端先发 `stt` 回显用户识别文本，再发 `llm.delta`（当前完整前缀）流式更新 AI 气泡，`llm.done` 后再播放 TTS；回复长度由 `WATCH_SYSTEM_PROMPT` 和用户请求控制，不再按固定字数截断。中文由内置 14px GB2312 点阵显示。
+- 服务端先发 `stt` 回显用户识别文本，再发 `llm.delta`（当前完整前缀）流式更新 AI 气泡，`llm.done` 后再播放 TTS；回复长度由 `WATCH_SYSTEM_PROMPT` 和用户请求控制。中文由内置 14px GB2312 点阵显示。
 - 聊天页最多持久化约 8 轮（每轮 user + assistant）或 8 KB 文本；当前轮超出单条/总量预算时不上历史，只保留 live 流式显示，下一次说话时丢弃。
 - 聊天字库 `components/watchshell/src/watch_font_cjk.c` 由 `tools/gen_cjk_font.py` 从 Noto Sans CJK 生成；修改字号/字形后重新运行脚本即可。
 - 服务器建议自建 `xiaozhi-esp32-server` 或本仓库 `server/`；API Key 留在服务器。
@@ -284,9 +247,7 @@ storage   0x320000  13.5 MB  FATFS (/storage)
 
 ## 7. 已知限制
 
-- 屏幕必须使用已验证的 4 线 SPI GC9307（QSPI 无 DC 的屏当前无法驱动）。
 - 没有 SD 卡；媒体文件放 FAT 分区或通过网页上传。
-- 音频功放输出前端/增益电阻仍在硬件排查中，低音量破音先按硬件问题处理。
 - PICTURES 当前是 JPG/JPEG 静态图，不是 MJPEG 连续视频；解码器只支持 baseline JPEG，渐进式 JPEG、HEIC、PNG 需要先转换。
 - VIDEO 支持 WebSocket/HTTP 视频目录 + 主动拉流，也兼容自定义 WSV2 发送端（JPEG + PCM16 16 kHz mono）；没有内置摄像头/视频文件解码器，服务器必须转码。
 - 中文聊天已内置 14px GB2312 点阵；未覆盖的生僻字/Emoji 仍可能显示为空白。
