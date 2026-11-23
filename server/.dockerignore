@@ -1,7 +1,13 @@
 .env
+.env.*
 .venv
 __pycache__
 *.py[cod]
 .pytest_cache
 data
 tests
+*.pem
+*.key
+*.p12
+*.crt
+*.log

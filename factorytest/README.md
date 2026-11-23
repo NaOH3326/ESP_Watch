@@ -9,7 +9,7 @@
 在工程根目录执行：
 
 ```bash
-cd /home/NaOH/Code/ESP32/ESP_Watch
+cd ESP_Watch
 source ~/.espressif/tools/activate_idf_v6.0.1.sh
 idf.py build
 idf.py -p /dev/ttyACM1 flash monitor
@@ -306,5 +306,5 @@ waiting for download
    - AXP2101 冷启动时 `PWRON` 可能短暂为低，可先上电、松键、等 1 s，再用 `Ctrl+T Ctrl+R` 复位。
 
 > 另外：现在工厂测试已并入主工程，VSCode 扩展监视的
-> `/home/NaOH/Code/ESP32/ESP_Watch/build/ESP_Watch.elf` 就包含 factorytest，
+> `build/ESP_Watch.elf` 就包含 factorytest，
 > 直接在工程根目录 `idf.py build / flash monitor` 即可，不需要切换工程。

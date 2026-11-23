@@ -26,7 +26,7 @@ docker compose up -d --build
 ## 1. 编译与烧录
 
 ```bash
-cd /home/NaOH/Code/ESP32/ESP_Watch
+cd ESP_Watch
 source ~/.espressif/tools/activate_idf_v6.0.1.sh
 idf.py set-target esp32s3
 idf.py build
