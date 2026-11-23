@@ -186,7 +186,7 @@ wss://your-domain/v1/ws
 
 `?provider=deepseek&model=deepseek-chat` 仍兼容，但不再是必需参数。
 
-DeepSeek 是文本模型，**不提供 ASR**。手表语音输入需要一个 OpenAI-compatible ASR 服务；可以直接用第 6.2 节的本地 Speaches，也可以配置云端 API。不配置 ASR 时聊天页仍可打开，但按住说话会显示 ASR 未配置错误。
+DeepSeek 是文本模型，不提供 ASR。手表语音输入需要一个 OpenAI-compatible ASR 服务；可以直接用第 6.2 节的本地 Speaches，也可以配置云端 API。不配置 ASR 时聊天页仍可打开，但按住说话会显示 ASR 未配置错误。
 
 ## 3. 本地运行（不用 Docker）
 
@@ -361,8 +361,6 @@ docker compose logs -f speaches
 curl -X POST \
   http://127.0.0.1:18000/v1/models/Systran/faster-whisper-small
 ```
-
-> **不要让模型按 TTL 卸载。** 当前 Speaches 版本读取的是 `WHISPER__TTL`，不是 `STT_MODEL_TTL`。Compose 已设置 `WHISPER__TTL=-1`，模型会常驻内存；否则空闲 5 分钟后模型被卸载，下一次 PTT 会重新访问 Hugging Face，表现为 ASR 长时间无响应或 `ASR request failed`。
 
 然后在 `.env` 中配置：
 

@@ -97,8 +97,6 @@ GAMES 内的 `MATRIX` 不使用脚本：它直接按 40 列维护长字符串、
 
 ## 已知限制
 
-- 仅 GC9307 4 线 SPI；QSPI 无 DC 屏不支持。
 - PICTURES 是静态 JPG/JPEG，不是 MJPEG 视频。
 - VIDEO 只接受 WSV2；HTTP 拉流需要服务器先把 MP4 转成 JPEG+PCM，不支持本地视频文件解码。
 - MCP 暂未实现；AI 只做 hello/ping/chat/listen/Opus/STT/LLM/TTS。AI 页的 `HELLO`/`PING` 预设用于分别测试文本链路和不依赖 ASR/AI 的 WS 往返。
-- 低音量音频失真按硬件问题处理。
